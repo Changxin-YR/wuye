@@ -1,0 +1,1 @@
+{"configured": true, "check_status": "ok", "inference_checked": true, "stream_event_count": 4, "stream_done": true, "tool_callback_calls": 2, "tool_args_keys": ["operation"], "answer_received": true}

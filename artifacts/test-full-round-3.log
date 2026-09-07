@@ -5,8 +5,8 @@ test_confirm_creates_once_and_audits (test_agent.AgentTests.test_confirm_creates
 test_confirm_requires_csrf (test_agent.AgentTests.test_confirm_requires_csrf) ... ok
 test_context_role_scope_and_no_passwords (test_agent.AgentTests.test_context_role_scope_and_no_passwords) ... ok
 test_disabled_session_cannot_confirm (test_agent.AgentTests.test_disabled_session_cannot_confirm) ... ok
-test_failed_commit_rolls_back_execution_and_status (test_agent.AgentTests.test_failed_commit_rolls_back_execution_and_status) ... [2026-09-08 07:23:47,899] ERROR in app: database_transaction_failed
-[2026-09-08 07:23:47,900] ERROR in app: audit_write_failed trace=48bac9f9916c4e9ebd6a50dd4a1de1b6
+test_failed_commit_rolls_back_execution_and_status (test_agent.AgentTests.test_failed_commit_rolls_back_execution_and_status) ... [2026-09-08 04:56:57,834] ERROR in app: database_transaction_failed
+[2026-09-08 04:56:57,837] ERROR in app: audit_write_failed trace=895804d8684f42339993b0542bacaae7
 ok
 test_foreign_action_cannot_read_confirm_cancel (test_agent.AgentTests.test_foreign_action_cannot_read_confirm_cancel) ... ok
 test_grant_does_not_bypass_confirmation_login (test_agent.AgentTests.test_grant_does_not_bypass_confirmation_login) ... ok
@@ -24,13 +24,9 @@ test_confirmation_hint_downgrades_model_execute_to_proposal (test_agent_reliabil
 test_no_progress_lookup_loop_terminates (test_agent_reliability.AgentLoopGuardTests.test_no_progress_lookup_loop_terminates) ... ok
 test_planner_fallback_runs_authorized_tool_when_model_returns_text (test_agent_reliability.AgentLoopGuardTests.test_planner_fallback_runs_authorized_tool_when_model_returns_text) ... ok
 test_repeated_terminal_tool_call_does_not_fail_the_turn (test_agent_reliability.AgentLoopGuardTests.test_repeated_terminal_tool_call_does_not_fail_the_turn) ... ok
-test_billing_aliases_cover_batch_calculation_language (test_agent_reliability.AgentPlannerTests.test_billing_aliases_cover_batch_calculation_language) ... ok
-test_billing_query_extracts_letter_building_name (test_agent_reliability.AgentPlannerTests.test_billing_query_extracts_letter_building_name) ... ok
 test_business_aliases_select_narrow_capability (test_agent_reliability.AgentPlannerTests.test_business_aliases_select_narrow_capability) ... ok
 test_duplicate_person_name_requires_disambiguation (test_agent_reliability.AgentPlannerTests.test_duplicate_person_name_requires_disambiguation) ... ok
 test_missing_relation_arguments_are_clarified (test_agent_reliability.AgentPlannerTests.test_missing_relation_arguments_are_clarified) ... ok
-test_order_create_alias_wins_over_generic_work_order_lookup (test_agent_reliability.AgentPlannerTests.test_order_create_alias_wins_over_generic_work_order_lookup) ... ok
-test_parking_assignment_clarifies_missing_entities (test_agent_reliability.AgentPlannerTests.test_parking_assignment_clarifies_missing_entities) ... ok
 test_phone_update_and_pronoun_use_resolved_person_context (test_agent_reliability.AgentPlannerTests.test_phone_update_and_pronoun_use_resolved_person_context) ... ok
 test_phone_update_stops_on_ambiguous_context (test_agent_reliability.AgentPlannerTests.test_phone_update_stops_on_ambiguous_context) ... ok
 test_r3_requests_are_confirmation_actions (test_agent_reliability.AgentPlannerTests.test_r3_requests_are_confirmation_actions) ... ok
@@ -55,14 +51,13 @@ test_admin_house_bind_and_unbind (test_app.PropertyAppContractTests.test_admin_h
 test_ai_blocks_repeated_mutation_command_in_one_turn (test_app.PropertyAppContractTests.test_ai_blocks_repeated_mutation_command_in_one_turn) ... ok
 test_ai_chat_stream_returns_sse_and_persists_conversation (test_app.PropertyAppContractTests.test_ai_chat_stream_returns_sse_and_persists_conversation) ... ok
 test_ai_connection_not_claimed (test_app.PropertyAppContractTests.test_ai_connection_not_claimed) ... ok
-test_ai_filters_context_and_keeps_conversation_private (test_app.PropertyAppContractTests.test_ai_filters_context_and_keeps_conversation_private) ... ok
-test_ai_frontend_prefixes_api_requests (test_app.PropertyAppContractTests.test_ai_frontend_prefixes_api_requests) ... C:\Users\27363\Desktop\tangli_miao\tests\test_app.py:110: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\27363\\Desktop\\tangli_miao\\static/js/app.js'>
+test_ai_filters_context_and_keeps_conversation_private (test_app.PropertyAppContractTests.test_ai_filters_context_and_keeps_conversation_private) ... ERROR
+test_ai_frontend_prefixes_api_requests (test_app.PropertyAppContractTests.test_ai_frontend_prefixes_api_requests) ... C:\Users\27363\Desktop\tangli_miao\tests\test_app.py:109: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\27363\\Desktop\\tangli_miao\\static/js/app.js'>
   script=self.client.get('/static/js/app.js').get_data(as_text=True)
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
 ok
 test_ai_numeric_and_non_object_inputs_rejected (test_app.PropertyAppContractTests.test_ai_numeric_and_non_object_inputs_rejected) ... ok
 test_ai_page_exposes_deployment_prefix_to_frontend (test_app.PropertyAppContractTests.test_ai_page_exposes_deployment_prefix_to_frontend) ... ok
-test_ai_repeat_request_uses_idempotent_order_tool (test_app.PropertyAppContractTests.test_ai_repeat_request_uses_idempotent_order_tool) ... ok
 test_ai_scope_change_resets_upstream_context (test_app.PropertyAppContractTests.test_ai_scope_change_resets_upstream_context) ... ok
 test_ai_upstream_id_not_accepted_as_local_id (test_app.PropertyAppContractTests.test_ai_upstream_id_not_accepted_as_local_id) ... ok
 test_all_role_pages_render (test_app.PropertyAppContractTests.test_all_role_pages_render) ... ok
@@ -73,8 +68,8 @@ test_cannot_reassign_in_progress (test_app.PropertyAppContractTests.test_cannot_
 test_dify_without_key_is_explicitly_unavailable (test_app.PropertyAppContractTests.test_dify_without_key_is_explicitly_unavailable) ... ok
 test_disable_busy_repairer_rejected (test_app.PropertyAppContractTests.test_disable_busy_repairer_rejected) ... ok
 test_disabled_user_session_invalidated (test_app.PropertyAppContractTests.test_disabled_user_session_invalidated) ... ok
-test_error_rolls_back_upload_and_order (test_app.PropertyAppContractTests.test_error_rolls_back_upload_and_order) ... [2026-09-08 07:23:53,485] ERROR in app: database_transaction_failed
-[2026-09-08 07:23:53,488] ERROR in app: audit_write_failed trace=4db89c426b9a41779ff1dae18c950e5a
+test_error_rolls_back_upload_and_order (test_app.PropertyAppContractTests.test_error_rolls_back_upload_and_order) ... [2026-09-08 04:57:04,222] ERROR in app: database_transaction_failed
+[2026-09-08 04:57:04,226] ERROR in app: audit_write_failed trace=25b17ebcc9b94f7091e014dbc86d7e36
 ok
 test_finish_requires_resolution (test_app.PropertyAppContractTests.test_finish_requires_resolution) ... ok
 test_forwarded_prefix_is_used_for_subpath_deployment (test_app.PropertyAppContractTests.test_forwarded_prefix_is_used_for_subpath_deployment) ... ok
@@ -129,7 +124,7 @@ test_check_and_safe_errors (test_bailian.BailianClientTests.test_check_and_safe_
 test_timeout_is_bounded (test_bailian.BailianClientTests.test_timeout_is_bounded) ... ok
 test_tool_callback_requires_a_tool_choice (test_bailian.BailianClientTests.test_tool_callback_requires_a_tool_choice) ... ok
 ----------------------------------------
-Exception occurred during processing of request from ('127.0.0.1', 59825)
+Exception occurred during processing of request from ('127.0.0.1', 53469)
 Traceback (most recent call last):
   File "D:\python\Lib\socketserver.py", line 697, in process_request_thread
     self.finish_request(request, client_address)
@@ -160,14 +155,14 @@ ConnectionAbortedError: [WinError 10053] 你的主机中的软件中止了一个
 test_agent_mode_sse_real_http_and_conversation (test_dify.DifyWireTests.test_agent_mode_sse_real_http_and_conversation) ... ok
 test_http_and_sse_errors_are_safe (test_dify.DifyWireTests.test_http_and_sse_errors_are_safe) ... ok
 test_message_replacement (test_dify.DifyWireTests.test_message_replacement) ... ok
-test_model_failure_preserves_visible_pending_action (test_dify.DifyWireTests.test_model_failure_preserves_visible_pending_action) ... ok
-test_native_tool_callback_to_confirmation_roundtrip (test_dify.DifyWireTests.test_native_tool_callback_to_confirmation_roundtrip) ... ok
+test_model_failure_preserves_visible_pending_action (test_dify.DifyWireTests.test_model_failure_preserves_visible_pending_action) ... FAIL
+test_native_tool_callback_to_confirmation_roundtrip (test_dify.DifyWireTests.test_native_tool_callback_to_confirmation_roundtrip) ... ERROR
 test_native_tool_direct_owner_binding_real_http_persistence (test_dify.DifyWireTests.test_native_tool_direct_owner_binding_real_http_persistence) ... ok
 test_permission_revocation_during_inference_drops_answer (test_dify.DifyWireTests.test_permission_revocation_during_inference_drops_answer) ... ok
 test_timeout_is_bounded (test_dify.DifyWireTests.test_timeout_is_bounded) ... ok
 test_wrong_application_mode_explained (test_dify.DifyWireTests.test_wrong_application_mode_explained) ... ok
 ----------------------------------------
-Exception occurred during processing of request from ('127.0.0.1', 57433)
+Exception occurred during processing of request from ('127.0.0.1', 52230)
 Traceback (most recent call last):
   File "D:\python\Lib\socketserver.py", line 697, in process_request_thread
     self.finish_request(request, client_address)
@@ -223,7 +218,34 @@ test_resident_only_current_relations (test_property_v2.PropertyV2Tests.test_resi
 test_role_change_invalidates_session_and_records_old_new_scope (test_property_v2.PropertyV2Tests.test_role_change_invalidates_session_and_records_old_new_scope) ... ok
 test_unique_house_per_unit_not_global_address (test_property_v2.PropertyV2Tests.test_unique_house_per_unit_not_global_address) ... ok
 
+======================================================================
+ERROR: test_ai_filters_context_and_keeps_conversation_private (test_app.PropertyAppContractTests.test_ai_filters_context_and_keeps_conversation_private)
 ----------------------------------------------------------------------
-Ran 159 tests in 158.321s
+Traceback (most recent call last):
+  File "C:\Users\27363\Desktop\tangli_miao\tests\test_app.py", line 289, in test_ai_filters_context_and_keeps_conversation_private
+    query,user,conv=call.call_args.args;self.assertNotIn('隐私暗号',query);self.assertIn('厨房漏水',query);self.assertIn('property:2:',user)
+                    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'args'
 
-OK
+======================================================================
+ERROR: test_native_tool_callback_to_confirmation_roundtrip (test_dify.DifyWireTests.test_native_tool_callback_to_confirmation_roundtrip)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\27363\Desktop\tangli_miao\tests\test_dify.py", line 116, in test_native_tool_callback_to_confirmation_roundtrip
+    self.assertEqual(self.server.context_status,200);self.assertEqual(self.server.proposal_status,200)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'ThreadingHTTPServer' object has no attribute 'context_status'
+
+======================================================================
+FAIL: test_model_failure_preserves_visible_pending_action (test_dify.DifyWireTests.test_model_failure_preserves_visible_pending_action)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\27363\Desktop\tangli_miao\tests\test_dify.py", line 126, in test_model_failure_preserves_visible_pending_action
+    self.assertEqual(response.status_code,503)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 200 != 503
+
+----------------------------------------------------------------------
+Ran 154 tests in 48.375s
+
+FAILED (failures=1, errors=2)

@@ -120,6 +120,11 @@ class BailianClientTests(unittest.TestCase):
         self.assertEqual(called,[{'request_token':'x','operation':'context'}])
         self.assertEqual(events[-1]['answer'],'百炼已收到')
 
+    def test_tool_callback_requires_a_tool_choice(self):
+        called=[]
+        self.client.chat('测试问题','property:1:v1',tool_callback=lambda args: called.append(args) or {'ok': True})
+        self.assertEqual(self.server.payload['tool_choice'], 'required')
+
 
 if __name__ == '__main__':
     unittest.main()

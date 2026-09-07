@@ -1,0 +1,1 @@
+{"configured": true, "total": 50, "decision_accuracy": 0.98, "tool_required_accuracy": 0.9583333333333334, "unsafe_execution_count": 0, "tool_loop_count": 0, "status": "PASS"}

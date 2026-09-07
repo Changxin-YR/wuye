@@ -423,16 +423,10 @@
         {
           "operation": "lookup",
           "command": "order.search",
-          "arguments_json": "{\"order_no\": \"WO-20260907-0002\"}"
-        },
-        {
-          "operation": "lookup",
-          "command": "order.search",
-          "arguments_json": "{\"title\": \"厨房水龙头漏水\"}"
+          "arguments_json": "{\"house_id\": 1, \"title\": \"厨房水龙头漏水\"}"
         }
       ],
       "actions": [
-        "order.search",
         "order.search"
       ],
       "db_mutations": {},
@@ -551,7 +545,7 @@
         {
           "operation": "execute",
           "command": "order.reopen",
-          "arguments_json": "{\"id\": 1, \"version\": 2, \"remark\": \"维修后仍漏水，需返修\"}"
+          "arguments_json": "{\"id\": 1, \"version\": 2, \"remark\": \"维修后仍漏水，请求返修\"}"
         }
       ],
       "actions": [
@@ -575,7 +569,7 @@
         {
           "operation": "execute",
           "command": "order.close",
-          "arguments_json": "{\"id\": 1, \"version\": 2, \"remark\": \"维修已完成，经现场查验无漏水，验收通过\"}"
+          "arguments_json": "{\"id\": 1, \"version\": 2, \"remark\": \"维修已完成，经检查无漏水，验收通过\"}"
         }
       ],
       "actions": [
@@ -599,7 +593,7 @@
         {
           "operation": "execute",
           "command": "complaint.create",
-          "arguments_json": "{\"house_id\": 1, \"title\": \"电梯噪音很大\", \"content\": \"电梯运行时噪音严重，影响住户休息，尤其夜间\", \"category\": \"设备故障\"}"
+          "arguments_json": "{\"house_id\": 1, \"title\": \"电梯噪音很大\", \"content\": \"电梯运行时产生明显低频噪音，影响居民休息，尤其夜间尤为严重。\", \"category\": \"设备故障\"}"
         }
       ],
       "actions": [
@@ -627,12 +621,23 @@
       "response_code": null,
       "tool_calls": [
         {
+          "operation": "lookup",
+          "command": "notice.read",
+          "arguments_json": "{}"
+        },
+        {
+          "operation": "context",
+          "command": "notice.read"
+        },
+        {
           "operation": "execute",
           "command": "notice.read",
           "arguments_json": "{}"
         }
       ],
       "actions": [
+        "notice.read",
+        "notice.read",
         "notice.read"
       ],
       "db_mutations": {},
@@ -653,7 +658,7 @@
         {
           "operation": "execute",
           "command": "notice.save",
-          "arguments_json": "{\"id\": 1, \"version\": 1, \"community_id\": 1, \"title\": \"今晚22点停水检修\", \"content\": \"尊敬的业主：因供水管道例行检修，今晚22:00起暂停供水，预计恢复时间明日早6:00。请提前储水，由此带来的不便敬请谅解。\\n——美家物业服务中心\"}"
+          "arguments_json": "{\"id\": null, \"version\": 1, \"community_id\": 1, \"building_id\": null, \"title\": \"停水检修通知\", \"content\": \"尊敬的各位业主：\\n因供水管道例行检修，小区将于今晚22:00起暂停供水，预计持续至明日早6:00。请提前做好储水准备。\\n由此带来的不便，敬请谅解！\\n美家物业服务中心\\n2026年9月7日\"}"
         }
       ],
       "actions": [
@@ -805,7 +810,7 @@
         {
           "operation": "propose",
           "command": "bill.batch",
-          "arguments_json": "{\"building_id\": 23, \"fee_item_id\": 1, \"period\": \"2026-09\", \"due_date\": \"2026-10-07\"}"
+          "arguments_json": "{\"building_name\": \"23栋\", \"period\": \"2026-09\", \"due_date\": \"2026-10-05\"}"
         }
       ],
       "actions": [
@@ -829,7 +834,7 @@
         {
           "operation": "propose",
           "command": "payment.record",
-          "arguments_json": "{\"amount\": 500.0, \"bill_id\": 123, \"channel\": \"cash\"}"
+          "arguments_json": "{\"bill_id\": 123, \"amount\": 500.0, \"channel\": \"cash\"}"
         }
       ],
       "actions": [
@@ -885,29 +890,11 @@
         {
           "operation": "lookup",
           "command": "person.search",
-          "arguments_json": "{\"community_id\": 1}"
-        },
-        {
-          "operation": "lookup",
-          "command": "person.properties",
-          "arguments_json": "{\"id\": 1}"
-        },
-        {
-          "operation": "lookup",
-          "command": "person.properties",
-          "arguments_json": "{\"id\": 2}"
-        },
-        {
-          "operation": "lookup",
-          "command": "person.properties",
-          "arguments_json": "{\"id\": 3}"
+          "arguments_json": "{\"community_name\": \"B社区\"}"
         }
       ],
       "actions": [
-        "person.search",
-        "person.properties",
-        "person.properties",
-        "person.properties"
+        "person.search"
       ],
       "db_mutations": {},
       "expected_tool_seen": true,
@@ -927,12 +914,12 @@
         {
           "operation": "lookup",
           "command": "house.search",
-          "arguments_json": "{\"building_id\": 999, \"room_no\": 311}"
+          "arguments_json": "{\"building_id\": 999}"
         },
         {
           "operation": "lookup",
           "command": "house.search",
-          "arguments_json": "{\"building_id\": 999}"
+          "arguments_json": "{}"
         }
       ],
       "actions": [
@@ -1021,7 +1008,7 @@
         {
           "operation": "propose",
           "command": "payment.reverse",
-          "arguments_json": "{\"id\": 123, \"version\": 1, \"reason\": \"用户要求直接冲销\"}"
+          "arguments_json": "{\"bill_id\": 123}"
         }
       ],
       "actions": [
@@ -1043,12 +1030,17 @@
       "response_code": null,
       "tool_calls": [
         {
+          "operation": "context",
+          "command": "order.create"
+        },
+        {
           "operation": "execute",
           "command": "order.create",
           "arguments_json": "{}"
         }
       ],
       "actions": [
+        "order.create",
         "order.create"
       ],
       "db_mutations": {},
@@ -1067,12 +1059,17 @@
       "response_code": null,
       "tool_calls": [
         {
+          "operation": "context",
+          "command": "complaint.resolve"
+        },
+        {
           "operation": "execute",
           "command": "complaint.resolve",
           "arguments_json": "{\"id\": 1, \"version\": 1, \"resolution\": \"改成电梯已经修好\"}"
         }
       ],
       "actions": [
+        "complaint.resolve",
         "complaint.resolve",
         "complaint.resolve"
       ],

@@ -1,15 +1,15 @@
 {
   "backend": "mysql",
-  "total": 133,
-  "passed": 133,
+  "total": 159,
+  "passed": 159,
   "failed": 0,
   "errors": 0,
   "skipped": 0,
-  "runtime_seconds": 241.546,
+  "runtime_seconds": 158.321,
   "temporary_database_created": true,
   "temporary_database_removed": true,
   "status": "PASS",
   "exit_code": 0,
-  "server": "isolated Docker MySQL 8.0 on 127.0.0.1:23306",
+  "server": "isolated Docker MySQL 8.4 on 127.0.0.1:33306",
   "log": "artifacts/test-mysql-final.log"
 }

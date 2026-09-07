@@ -93,23 +93,15 @@ def main():
                         button = page.locator(f"a[href*='/operations/{create}']").count() > 0 if create else False
                         detail = page.goto(base + "/manage/" + module + "/999999", wait_until="domcontentloaded")
                         direct_status = detail.status if detail else 0
-                        api = page.evaluate("""async ({url, csrf}) => {
-                            const r = await fetch(url, {headers: {'X-CSRF-Token': csrf}});
-                            return {status: r.status, text: await r.text()};
-                        }""", {"url": base + "/api/manage/" + module, "csrf": csrf})
-                        api_status = api["status"]
+                        api = page.context.request.get(base + "/api/manage/" + module, headers={"X-CSRF-Token": csrf})
+                        api_status = api.status
                         mutation_status = None
                         if create:
-                            mutation = page.evaluate("""async ({url, csrf}) => {
-                                const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf}, body: JSON.stringify({data: {}})});
-                                return r.status;
-                            }""", {"url": base + "/api/business/" + create, "csrf": csrf})
-                            mutation_status = int(mutation)
-                        scope = page.evaluate("""async ({url, csrf}) => {
-                            const r = await fetch(url, {headers: {'X-CSRF-Token': csrf}});
-                            return {status: r.status, body: await r.json().catch(() => ({}))};
-                        }""", {"url": base + "/api/manage/buildings?community_id=2", "csrf": csrf})
-                        scope_total = scope["body"].get("total") if scope["status"] == 200 else None
+                            mutation = page.context.request.post(base + "/api/business/" + create,
+                                headers={"Content-Type": "application/json", "X-CSRF-Token": csrf}, data=json.dumps({"data": {}}))
+                            mutation_status = mutation.status
+                        scope = page.context.request.get(base + "/api/manage/buildings?community_id=2", headers={"X-CSRF-Token": csrf})
+                        scope_total = scope.json().get("total") if scope.status == 200 else None
                         expected_page = 200 if allowed else 403
                         expected_direct = 404 if allowed else 403
                         expected_api = 200 if allowed else 403

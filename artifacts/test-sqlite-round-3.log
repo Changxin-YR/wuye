@@ -5,8 +5,8 @@ test_confirm_creates_once_and_audits (test_agent.AgentTests.test_confirm_creates
 test_confirm_requires_csrf (test_agent.AgentTests.test_confirm_requires_csrf) ... ok
 test_context_role_scope_and_no_passwords (test_agent.AgentTests.test_context_role_scope_and_no_passwords) ... ok
 test_disabled_session_cannot_confirm (test_agent.AgentTests.test_disabled_session_cannot_confirm) ... ok
-test_failed_commit_rolls_back_execution_and_status (test_agent.AgentTests.test_failed_commit_rolls_back_execution_and_status) ... [2026-09-08 07:23:47,899] ERROR in app: database_transaction_failed
-[2026-09-08 07:23:47,900] ERROR in app: audit_write_failed trace=48bac9f9916c4e9ebd6a50dd4a1de1b6
+test_failed_commit_rolls_back_execution_and_status (test_agent.AgentTests.test_failed_commit_rolls_back_execution_and_status) ... [2026-09-08 02:48:37,300] ERROR in app: database_transaction_failed
+[2026-09-08 02:48:37,301] ERROR in app: audit_write_failed trace=e055249ff96b4cfdadbaa4451fb64856
 ok
 test_foreign_action_cannot_read_confirm_cancel (test_agent.AgentTests.test_foreign_action_cannot_read_confirm_cancel) ... ok
 test_grant_does_not_bypass_confirmation_login (test_agent.AgentTests.test_grant_does_not_bypass_confirmation_login) ... ok
@@ -20,28 +20,20 @@ test_tool_cannot_confirm (test_agent.AgentTests.test_tool_cannot_confirm) ... ok
 test_unknown_commands_and_bad_types_rejected (test_agent.AgentTests.test_unknown_commands_and_bad_types_rejected) ... ok
 test_user_disable_proposal_revalidates_target_version (test_agent.AgentTests.test_user_disable_proposal_revalidates_target_version) ... ok
 test_bailian_keeps_local_turn_history_for_follow_up (test_agent_reliability.AgentLoopGuardTests.test_bailian_keeps_local_turn_history_for_follow_up) ... ok
-test_confirmation_hint_downgrades_model_execute_to_proposal (test_agent_reliability.AgentLoopGuardTests.test_confirmation_hint_downgrades_model_execute_to_proposal) ... ok
 test_no_progress_lookup_loop_terminates (test_agent_reliability.AgentLoopGuardTests.test_no_progress_lookup_loop_terminates) ... ok
 test_planner_fallback_runs_authorized_tool_when_model_returns_text (test_agent_reliability.AgentLoopGuardTests.test_planner_fallback_runs_authorized_tool_when_model_returns_text) ... ok
 test_repeated_terminal_tool_call_does_not_fail_the_turn (test_agent_reliability.AgentLoopGuardTests.test_repeated_terminal_tool_call_does_not_fail_the_turn) ... ok
-test_billing_aliases_cover_batch_calculation_language (test_agent_reliability.AgentPlannerTests.test_billing_aliases_cover_batch_calculation_language) ... ok
-test_billing_query_extracts_letter_building_name (test_agent_reliability.AgentPlannerTests.test_billing_query_extracts_letter_building_name) ... ok
 test_business_aliases_select_narrow_capability (test_agent_reliability.AgentPlannerTests.test_business_aliases_select_narrow_capability) ... ok
 test_duplicate_person_name_requires_disambiguation (test_agent_reliability.AgentPlannerTests.test_duplicate_person_name_requires_disambiguation) ... ok
 test_missing_relation_arguments_are_clarified (test_agent_reliability.AgentPlannerTests.test_missing_relation_arguments_are_clarified) ... ok
-test_order_create_alias_wins_over_generic_work_order_lookup (test_agent_reliability.AgentPlannerTests.test_order_create_alias_wins_over_generic_work_order_lookup) ... ok
-test_parking_assignment_clarifies_missing_entities (test_agent_reliability.AgentPlannerTests.test_parking_assignment_clarifies_missing_entities) ... ok
 test_phone_update_and_pronoun_use_resolved_person_context (test_agent_reliability.AgentPlannerTests.test_phone_update_and_pronoun_use_resolved_person_context) ... ok
-test_phone_update_stops_on_ambiguous_context (test_agent_reliability.AgentPlannerTests.test_phone_update_stops_on_ambiguous_context) ... ok
 test_r3_requests_are_confirmation_actions (test_agent_reliability.AgentPlannerTests.test_r3_requests_are_confirmation_actions) ... ok
 test_read_aliases_map_to_authorized_query_commands (test_agent_reliability.AgentPlannerTests.test_read_aliases_map_to_authorized_query_commands) ... ok
 test_repeat_repair_request_is_clarified (test_agent_reliability.AgentPlannerTests.test_repeat_repair_request_is_clarified) ... ok
-test_reverse_without_payment_target_is_clarified (test_agent_reliability.AgentPlannerTests.test_reverse_without_payment_target_is_clarified) ... ok
 test_specific_order_alias_wins_over_generic_work_order_alias (test_agent_reliability.AgentPlannerTests.test_specific_order_alias_wins_over_generic_work_order_alias) ... ok
 test_sql_identity_prompt_is_denied_case_insensitively (test_agent_reliability.AgentPlannerTests.test_sql_identity_prompt_is_denied_case_insensitively) ... ok
 test_structured_tool_result_has_stable_terminal_code (test_agent_reliability.AgentPlannerTests.test_structured_tool_result_has_stable_terminal_code) ... ok
 test_vehicle_and_parking_entities_are_extracted (test_agent_reliability.AgentPlannerTests.test_vehicle_and_parking_entities_are_extracted) ... ok
-test_vehicle_write_stops_on_ambiguous_owner (test_agent_reliability.AgentPlannerTests.test_vehicle_write_stops_on_ambiguous_owner) ... ok
 test_legacy_short_lived_token_remains_compatible (test_agent_security_static.AgentSecurityPrimitiveTests.test_legacy_short_lived_token_remains_compatible) ... ok
 test_model_record_uses_minimum_disclosure (test_agent_security_static.AgentSecurityPrimitiveTests.test_model_record_uses_minimum_disclosure) ... ok
 test_provider_output_scrubs_current_grant (test_agent_security_static.AgentSecurityPrimitiveTests.test_provider_output_scrubs_current_grant) ... ok
@@ -52,17 +44,16 @@ test_account_locks_after_five_bad_passwords (test_app.PropertyAppContractTests.t
 test_admin_cannot_disable_self (test_app.PropertyAppContractTests.test_admin_cannot_disable_self) ... ok
 test_admin_creates_worker (test_app.PropertyAppContractTests.test_admin_creates_worker) ... ok
 test_admin_house_bind_and_unbind (test_app.PropertyAppContractTests.test_admin_house_bind_and_unbind) ... ok
-test_ai_blocks_repeated_mutation_command_in_one_turn (test_app.PropertyAppContractTests.test_ai_blocks_repeated_mutation_command_in_one_turn) ... ok
+test_ai_blocks_repeated_mutation_command_in_one_turn (test_app.PropertyAppContractTests.test_ai_blocks_repeated_mutation_command_in_one_turn) ... FAIL
 test_ai_chat_stream_returns_sse_and_persists_conversation (test_app.PropertyAppContractTests.test_ai_chat_stream_returns_sse_and_persists_conversation) ... ok
 test_ai_connection_not_claimed (test_app.PropertyAppContractTests.test_ai_connection_not_claimed) ... ok
 test_ai_filters_context_and_keeps_conversation_private (test_app.PropertyAppContractTests.test_ai_filters_context_and_keeps_conversation_private) ... ok
-test_ai_frontend_prefixes_api_requests (test_app.PropertyAppContractTests.test_ai_frontend_prefixes_api_requests) ... C:\Users\27363\Desktop\tangli_miao\tests\test_app.py:110: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\27363\\Desktop\\tangli_miao\\static/js/app.js'>
+test_ai_frontend_prefixes_api_requests (test_app.PropertyAppContractTests.test_ai_frontend_prefixes_api_requests) ... C:\Users\27363\Desktop\tangli_miao\tests\test_app.py:109: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\27363\\Desktop\\tangli_miao\\static/js/app.js'>
   script=self.client.get('/static/js/app.js').get_data(as_text=True)
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
 ok
 test_ai_numeric_and_non_object_inputs_rejected (test_app.PropertyAppContractTests.test_ai_numeric_and_non_object_inputs_rejected) ... ok
 test_ai_page_exposes_deployment_prefix_to_frontend (test_app.PropertyAppContractTests.test_ai_page_exposes_deployment_prefix_to_frontend) ... ok
-test_ai_repeat_request_uses_idempotent_order_tool (test_app.PropertyAppContractTests.test_ai_repeat_request_uses_idempotent_order_tool) ... ok
 test_ai_scope_change_resets_upstream_context (test_app.PropertyAppContractTests.test_ai_scope_change_resets_upstream_context) ... ok
 test_ai_upstream_id_not_accepted_as_local_id (test_app.PropertyAppContractTests.test_ai_upstream_id_not_accepted_as_local_id) ... ok
 test_all_role_pages_render (test_app.PropertyAppContractTests.test_all_role_pages_render) ... ok
@@ -73,8 +64,8 @@ test_cannot_reassign_in_progress (test_app.PropertyAppContractTests.test_cannot_
 test_dify_without_key_is_explicitly_unavailable (test_app.PropertyAppContractTests.test_dify_without_key_is_explicitly_unavailable) ... ok
 test_disable_busy_repairer_rejected (test_app.PropertyAppContractTests.test_disable_busy_repairer_rejected) ... ok
 test_disabled_user_session_invalidated (test_app.PropertyAppContractTests.test_disabled_user_session_invalidated) ... ok
-test_error_rolls_back_upload_and_order (test_app.PropertyAppContractTests.test_error_rolls_back_upload_and_order) ... [2026-09-08 07:23:53,485] ERROR in app: database_transaction_failed
-[2026-09-08 07:23:53,488] ERROR in app: audit_write_failed trace=4db89c426b9a41779ff1dae18c950e5a
+test_error_rolls_back_upload_and_order (test_app.PropertyAppContractTests.test_error_rolls_back_upload_and_order) ... [2026-09-08 02:48:43,740] ERROR in app: database_transaction_failed
+[2026-09-08 02:48:43,745] ERROR in app: audit_write_failed trace=967f20bc935747dab9e86a6368897197
 ok
 test_finish_requires_resolution (test_app.PropertyAppContractTests.test_finish_requires_resolution) ... ok
 test_forwarded_prefix_is_used_for_subpath_deployment (test_app.PropertyAppContractTests.test_forwarded_prefix_is_used_for_subpath_deployment) ... ok
@@ -129,7 +120,7 @@ test_check_and_safe_errors (test_bailian.BailianClientTests.test_check_and_safe_
 test_timeout_is_bounded (test_bailian.BailianClientTests.test_timeout_is_bounded) ... ok
 test_tool_callback_requires_a_tool_choice (test_bailian.BailianClientTests.test_tool_callback_requires_a_tool_choice) ... ok
 ----------------------------------------
-Exception occurred during processing of request from ('127.0.0.1', 59825)
+Exception occurred during processing of request from ('127.0.0.1', 52448)
 Traceback (most recent call last):
   File "D:\python\Lib\socketserver.py", line 697, in process_request_thread
     self.finish_request(request, client_address)
@@ -167,7 +158,7 @@ test_permission_revocation_during_inference_drops_answer (test_dify.DifyWireTest
 test_timeout_is_bounded (test_dify.DifyWireTests.test_timeout_is_bounded) ... ok
 test_wrong_application_mode_explained (test_dify.DifyWireTests.test_wrong_application_mode_explained) ... ok
 ----------------------------------------
-Exception occurred during processing of request from ('127.0.0.1', 57433)
+Exception occurred during processing of request from ('127.0.0.1', 55561)
 Traceback (most recent call last):
   File "D:\python\Lib\socketserver.py", line 697, in process_request_thread
     self.finish_request(request, client_address)
@@ -201,7 +192,6 @@ test_upgrade_is_idempotent_and_does_not_disable_verified_staff (test_migration.M
 test_admin_property_owner_relationship_persists_after_reopen (test_property_v2.PropertyV2Tests.test_admin_property_owner_relationship_persists_after_reopen) ... ok
 test_agent_direct_bind_repeat_lookup_and_ambiguity (test_property_v2.PropertyV2Tests.test_agent_direct_bind_repeat_lookup_and_ambiguity) ... ok
 test_agent_missing_entities_and_no_permission (test_property_v2.PropertyV2Tests.test_agent_missing_entities_and_no_permission) ... ok
-test_agent_notice_read_alias_returns_scoped_notices (test_property_v2.PropertyV2Tests.test_agent_notice_read_alias_returns_scoped_notices) ... ok
 test_agent_query_common_aliases_are_scoped (test_property_v2.PropertyV2Tests.test_agent_query_common_aliases_are_scoped) ... ok
 test_all_modules_and_operation_forms_render (test_property_v2.PropertyV2Tests.test_all_modules_and_operation_forms_render) ... ok
 test_batch_monthly_bills_are_atomic_scoped_and_repeat_safe (test_property_v2.PropertyV2Tests.test_batch_monthly_bills_are_atomic_scoped_and_repeat_safe) ... ok
@@ -223,7 +213,16 @@ test_resident_only_current_relations (test_property_v2.PropertyV2Tests.test_resi
 test_role_change_invalidates_session_and_records_old_new_scope (test_property_v2.PropertyV2Tests.test_role_change_invalidates_session_and_records_old_new_scope) ... ok
 test_unique_house_per_unit_not_global_address (test_property_v2.PropertyV2Tests.test_unique_house_per_unit_not_global_address) ... ok
 
+======================================================================
+FAIL: test_ai_blocks_repeated_mutation_command_in_one_turn (test_app.PropertyAppContractTests.test_ai_blocks_repeated_mutation_command_in_one_turn)
 ----------------------------------------------------------------------
-Ran 159 tests in 158.321s
+Traceback (most recent call last):
+  File "C:\Users\27363\Desktop\tangli_miao\tests\test_app.py", line 281, in test_ai_blocks_repeated_mutation_command_in_one_turn
+    self.assertEqual(self.count(WorkOrder),1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
 
-OK
+----------------------------------------------------------------------
+Ran 149 tests in 45.534s
+
+FAILED (failures=1)

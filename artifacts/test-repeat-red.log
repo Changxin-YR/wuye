@@ -1,0 +1,88 @@
+test_account_locks_after_five_bad_passwords (test_app.PropertyAppContractTests.test_account_locks_after_five_bad_passwords) ... ok
+test_admin_cannot_disable_self (test_app.PropertyAppContractTests.test_admin_cannot_disable_self) ... ok
+test_admin_creates_worker (test_app.PropertyAppContractTests.test_admin_creates_worker) ... ok
+test_admin_house_bind_and_unbind (test_app.PropertyAppContractTests.test_admin_house_bind_and_unbind) ... ok
+test_ai_blocks_repeated_mutation_command_in_one_turn (test_app.PropertyAppContractTests.test_ai_blocks_repeated_mutation_command_in_one_turn) ... ok
+test_ai_chat_stream_returns_sse_and_persists_conversation (test_app.PropertyAppContractTests.test_ai_chat_stream_returns_sse_and_persists_conversation) ... ok
+test_ai_connection_not_claimed (test_app.PropertyAppContractTests.test_ai_connection_not_claimed) ... ok
+test_ai_filters_context_and_keeps_conversation_private (test_app.PropertyAppContractTests.test_ai_filters_context_and_keeps_conversation_private) ... ok
+test_ai_frontend_prefixes_api_requests (test_app.PropertyAppContractTests.test_ai_frontend_prefixes_api_requests) ... C:\Users\27363\Desktop\tangli_miao\tests\test_app.py:110: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\27363\\Desktop\\tangli_miao\\static/js/app.js'>
+  script=self.client.get('/static/js/app.js').get_data(as_text=True)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_ai_numeric_and_non_object_inputs_rejected (test_app.PropertyAppContractTests.test_ai_numeric_and_non_object_inputs_rejected) ... ok
+test_ai_page_exposes_deployment_prefix_to_frontend (test_app.PropertyAppContractTests.test_ai_page_exposes_deployment_prefix_to_frontend) ... ok
+test_ai_repeat_request_uses_idempotent_order_tool (test_app.PropertyAppContractTests.test_ai_repeat_request_uses_idempotent_order_tool) ... ERROR
+test_ai_scope_change_resets_upstream_context (test_app.PropertyAppContractTests.test_ai_scope_change_resets_upstream_context) ... ok
+test_ai_upstream_id_not_accepted_as_local_id (test_app.PropertyAppContractTests.test_ai_upstream_id_not_accepted_as_local_id) ... ok
+test_all_role_pages_render (test_app.PropertyAppContractTests.test_all_role_pages_render) ... ok
+test_authenticated_forms_render_csrf_token (test_app.PropertyAppContractTests.test_authenticated_forms_render_csrf_token) ... ok
+test_cancel_requires_reason (test_app.PropertyAppContractTests.test_cancel_requires_reason) ... ok
+test_cannot_cancel_in_progress (test_app.PropertyAppContractTests.test_cannot_cancel_in_progress) ... ok
+test_cannot_reassign_in_progress (test_app.PropertyAppContractTests.test_cannot_reassign_in_progress) ... ok
+test_dify_without_key_is_explicitly_unavailable (test_app.PropertyAppContractTests.test_dify_without_key_is_explicitly_unavailable) ... ok
+test_disable_busy_repairer_rejected (test_app.PropertyAppContractTests.test_disable_busy_repairer_rejected) ... ok
+test_disabled_user_session_invalidated (test_app.PropertyAppContractTests.test_disabled_user_session_invalidated) ... ok
+test_error_rolls_back_upload_and_order (test_app.PropertyAppContractTests.test_error_rolls_back_upload_and_order) ... [2026-09-08 05:34:37,149] ERROR in app: database_transaction_failed
+[2026-09-08 05:34:37,153] ERROR in app: audit_write_failed trace=94dc08ec3d924248a9caacfa1ff3dadc
+ok
+test_finish_requires_resolution (test_app.PropertyAppContractTests.test_finish_requires_resolution) ... ok
+test_forwarded_prefix_is_used_for_subpath_deployment (test_app.PropertyAppContractTests.test_forwarded_prefix_is_used_for_subpath_deployment) ... ok
+test_full_repair_rework_evaluation_flow (test_app.PropertyAppContractTests.test_full_repair_rework_evaluation_flow) ... ok
+test_health_is_database_only (test_app.PropertyAppContractTests.test_health_is_database_only) ... ok
+test_house_cannot_bind_over_existing_owner (test_app.PropertyAppContractTests.test_house_cannot_bind_over_existing_owner) ... ok
+test_house_unbind_blocks_open_order (test_app.PropertyAppContractTests.test_house_unbind_blocks_open_order) ... ok
+test_invalid_house_action_not_success (test_app.PropertyAppContractTests.test_invalid_house_action_not_success) ... ok
+test_invalid_room_rejected (test_app.PropertyAppContractTests.test_invalid_room_rejected) ... ok
+test_login_and_registration_require_csrf (test_app.PropertyAppContractTests.test_login_and_registration_require_csrf) ... ok
+test_login_does_not_redirect_to_external_next_url (test_app.PropertyAppContractTests.test_login_does_not_redirect_to_external_next_url) ... ok
+test_login_preserves_forwarded_prefix_for_local_next_target (test_app.PropertyAppContractTests.test_login_preserves_forwarded_prefix_for_local_next_target) ... ok
+test_logout_requires_csrf_protected_post (test_app.PropertyAppContractTests.test_logout_requires_csrf_protected_post) ... ok
+test_non_image_rejected (test_app.PropertyAppContractTests.test_non_image_rejected) ... ok
+test_notice_blank_does_not_report_success (test_app.PropertyAppContractTests.test_notice_blank_does_not_report_success) ... ok
+test_notice_delete_with_invalid_id_returns_validation_error (test_app.PropertyAppContractTests.test_notice_delete_with_invalid_id_returns_validation_error) ... ok
+test_notice_edit_and_owner_read (test_app.PropertyAppContractTests.test_notice_edit_and_owner_read) ... ok
+test_notification_ownership (test_app.PropertyAppContractTests.test_notification_ownership) ... ok
+test_order_image_is_private (test_app.PropertyAppContractTests.test_order_image_is_private) ... ok
+test_order_transition_rejects_invalid_jump (test_app.PropertyAppContractTests.test_order_transition_rejects_invalid_jump) ... ok
+test_order_with_unknown_house_id_is_rejected (test_app.PropertyAppContractTests.test_order_with_unknown_house_id_is_rejected) ... ok
+test_orm_concurrent_update_detected (test_app.PropertyAppContractTests.test_orm_concurrent_update_detected) ... ok
+test_owner_cannot_claim_unbound_house (test_app.PropertyAppContractTests.test_owner_cannot_claim_unbound_house) ... ok
+test_owner_cannot_open_admin_house_page (test_app.PropertyAppContractTests.test_owner_cannot_open_admin_house_page) ... ok
+test_owner_cannot_read_another_owners_order (test_app.PropertyAppContractTests.test_owner_cannot_read_another_owners_order) ... ok
+test_owner_cannot_run_ai_admin_probe (test_app.PropertyAppContractTests.test_owner_cannot_run_ai_admin_probe) ... ok
+test_owner_cannot_use_other_house (test_app.PropertyAppContractTests.test_owner_cannot_use_other_house) ... ok
+test_pagination_and_search_preserve_scope (test_app.PropertyAppContractTests.test_pagination_and_search_preserve_scope) ... ok
+test_password_change_requires_current_password (test_app.PropertyAppContractTests.test_password_change_requires_current_password) ... ok
+test_password_change_revokes_other_sessions (test_app.PropertyAppContractTests.test_password_change_revokes_other_sessions) ... ok
+test_private_order_requires_house (test_app.PropertyAppContractTests.test_private_order_requires_house) ... ok
+test_profile_avatar_reencoded (test_app.PropertyAppContractTests.test_profile_avatar_reencoded) ... ok
+test_profile_rejects_short_password_without_success_message (test_app.PropertyAppContractTests.test_profile_rejects_short_password_without_success_message) ... ok
+test_profile_renders_uploaded_avatar (test_app.PropertyAppContractTests.test_profile_renders_uploaded_avatar) ... ok
+test_public_area_order_without_house (test_app.PropertyAppContractTests.test_public_area_order_without_house) ... ok
+test_public_owner_registration (test_app.PropertyAppContractTests.test_public_owner_registration) ... ok
+test_public_registration_cannot_choose_staff_or_admin (test_app.PropertyAppContractTests.test_public_registration_cannot_choose_staff_or_admin) ... ok
+test_reassignment_revokes_previous_worker (test_app.PropertyAppContractTests.test_reassignment_revokes_previous_worker) ... ok
+test_registration_with_invalid_role_returns_validation_error (test_app.PropertyAppContractTests.test_registration_with_invalid_role_returns_validation_error) ... ok
+test_security_headers (test_app.PropertyAppContractTests.test_security_headers) ... ok
+test_sql_injection_search_literal (test_app.PropertyAppContractTests.test_sql_injection_search_literal) ... ok
+test_stale_form_rejected (test_app.PropertyAppContractTests.test_stale_form_rejected) ... ok
+test_static_javascript_has_executable_mime_type (test_app.PropertyAppContractTests.test_static_javascript_has_executable_mime_type) ... D:\python\Lib\unittest\case.py:615: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\27363\\Desktop\\tangli_miao\\static/js/app.js'>
+  result = method()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_worker_cannot_access_unassigned_order (test_app.PropertyAppContractTests.test_worker_cannot_access_unassigned_order) ... ok
+
+======================================================================
+ERROR: test_ai_repeat_request_uses_idempotent_order_tool (test_app.PropertyAppContractTests.test_ai_repeat_request_uses_idempotent_order_tool)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\27363\Desktop\tangli_miao\tests\test_app.py", line 299, in test_ai_repeat_request_uses_idempotent_order_tool
+    self.assertEqual(response.json['actions'][0]['command'],'order.create')
+                     ~~~~~~~~~~~~~~~~~~~~~~~~^^^
+IndexError: list index out of range
+
+----------------------------------------------------------------------
+Ran 66 tests in 16.418s
+
+FAILED (errors=1)

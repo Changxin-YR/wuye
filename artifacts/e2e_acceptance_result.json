@@ -121,5 +121,5 @@
   "validation": {
     "required_fields": true
   },
-  "screenshot": "C:\\Users\\27363\\Desktop\\tangli_miao\\artifacts\\e2e-work-orders.png"
+  "screenshot": "artifacts\\e2e-work-orders.png"
 }

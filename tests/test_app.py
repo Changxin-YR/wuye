@@ -1,4 +1,5 @@
 import io
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -279,6 +280,28 @@ class PropertyAppContractTests(unittest.TestCase):
         response=self.json_post('/ai/chat',{'message':'再提交一次刚才的报修'})
         self.assertEqual(response.status_code,200)
         self.assertEqual(self.count(WorkOrder),1)
+
+    def test_ai_repeat_request_uses_idempotent_order_tool(self):
+        self.login('alice'); self.order()
+        client=BailianClient('http://127.0.0.1:1','fixture-key')
+        self.app.extensions['dify']=client
+        responses=iter([
+            {'id':'one','choices':[{'message':{'tool_calls':[{'id':'a','function':{'name':'property_agent_tool','arguments':json.dumps({'operation':'lookup','command':'order.search','arguments_json':'{}'})}}]}}]},
+            {'id':'two','choices':[{'message':{'content':'已有报修记录，本轮未重复提交。'}}]},
+        ])
+        calls=[]
+        def request(*args,**kwargs): return next(responses)
+        original_chat=BailianClient.chat
+        def capture_chat(instance,query,user,conversation_id='',tool_callback=None,system_prompt=''):
+            def capture(args):
+                calls.append(args)
+                return tool_callback(args)
+            return original_chat(instance,query,user,conversation_id,capture,system_prompt)
+        with patch.object(client,'_request',side_effect=request), patch.object(BailianClient,'chat',capture_chat):
+            response=self.json_post('/ai/chat',{'message':'再提交一次刚才的报修'})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.count(WorkOrder),1)
+        self.assertEqual(calls[0]['command'],'order.create')
     def test_owner_cannot_run_ai_admin_probe(self):
         self.login();self.assertEqual(self.json_post('/ai/check',{}).status_code,403)
     def test_ai_filters_context_and_keeps_conversation_private(self):

@@ -5,8 +5,8 @@ test_confirm_creates_once_and_audits (test_agent.AgentTests.test_confirm_creates
 test_confirm_requires_csrf (test_agent.AgentTests.test_confirm_requires_csrf) ... ok
 test_context_role_scope_and_no_passwords (test_agent.AgentTests.test_context_role_scope_and_no_passwords) ... ok
 test_disabled_session_cannot_confirm (test_agent.AgentTests.test_disabled_session_cannot_confirm) ... ok
-test_failed_commit_rolls_back_execution_and_status (test_agent.AgentTests.test_failed_commit_rolls_back_execution_and_status) ... [2026-09-08 07:23:47,899] ERROR in app: database_transaction_failed
-[2026-09-08 07:23:47,900] ERROR in app: audit_write_failed trace=48bac9f9916c4e9ebd6a50dd4a1de1b6
+test_failed_commit_rolls_back_execution_and_status (test_agent.AgentTests.test_failed_commit_rolls_back_execution_and_status) ... [2026-09-08 07:21:08,782] ERROR in app: database_transaction_failed
+[2026-09-08 07:21:08,783] ERROR in app: audit_write_failed trace=24d2b76b4adb4d719ebc11f7a140ba3f
 ok
 test_foreign_action_cannot_read_confirm_cancel (test_agent.AgentTests.test_foreign_action_cannot_read_confirm_cancel) ... ok
 test_grant_does_not_bypass_confirmation_login (test_agent.AgentTests.test_grant_does_not_bypass_confirmation_login) ... ok
@@ -73,8 +73,8 @@ test_cannot_reassign_in_progress (test_app.PropertyAppContractTests.test_cannot_
 test_dify_without_key_is_explicitly_unavailable (test_app.PropertyAppContractTests.test_dify_without_key_is_explicitly_unavailable) ... ok
 test_disable_busy_repairer_rejected (test_app.PropertyAppContractTests.test_disable_busy_repairer_rejected) ... ok
 test_disabled_user_session_invalidated (test_app.PropertyAppContractTests.test_disabled_user_session_invalidated) ... ok
-test_error_rolls_back_upload_and_order (test_app.PropertyAppContractTests.test_error_rolls_back_upload_and_order) ... [2026-09-08 07:23:53,485] ERROR in app: database_transaction_failed
-[2026-09-08 07:23:53,488] ERROR in app: audit_write_failed trace=4db89c426b9a41779ff1dae18c950e5a
+test_error_rolls_back_upload_and_order (test_app.PropertyAppContractTests.test_error_rolls_back_upload_and_order) ... [2026-09-08 07:21:14,398] ERROR in app: database_transaction_failed
+[2026-09-08 07:21:14,401] ERROR in app: audit_write_failed trace=d8195248aa7a4c68a56edf4a58021783
 ok
 test_finish_requires_resolution (test_app.PropertyAppContractTests.test_finish_requires_resolution) ... ok
 test_forwarded_prefix_is_used_for_subpath_deployment (test_app.PropertyAppContractTests.test_forwarded_prefix_is_used_for_subpath_deployment) ... ok
@@ -129,7 +129,7 @@ test_check_and_safe_errors (test_bailian.BailianClientTests.test_check_and_safe_
 test_timeout_is_bounded (test_bailian.BailianClientTests.test_timeout_is_bounded) ... ok
 test_tool_callback_requires_a_tool_choice (test_bailian.BailianClientTests.test_tool_callback_requires_a_tool_choice) ... ok
 ----------------------------------------
-Exception occurred during processing of request from ('127.0.0.1', 59825)
+Exception occurred during processing of request from ('127.0.0.1', 57941)
 Traceback (most recent call last):
   File "D:\python\Lib\socketserver.py", line 697, in process_request_thread
     self.finish_request(request, client_address)
@@ -167,7 +167,7 @@ test_permission_revocation_during_inference_drops_answer (test_dify.DifyWireTest
 test_timeout_is_bounded (test_dify.DifyWireTests.test_timeout_is_bounded) ... ok
 test_wrong_application_mode_explained (test_dify.DifyWireTests.test_wrong_application_mode_explained) ... ok
 ----------------------------------------
-Exception occurred during processing of request from ('127.0.0.1', 57433)
+Exception occurred during processing of request from ('127.0.0.1', 53618)
 Traceback (most recent call last):
   File "D:\python\Lib\socketserver.py", line 697, in process_request_thread
     self.finish_request(request, client_address)
@@ -224,6 +224,6 @@ test_role_change_invalidates_session_and_records_old_new_scope (test_property_v2
 test_unique_house_per_unit_not_global_address (test_property_v2.PropertyV2Tests.test_unique_house_per_unit_not_global_address) ... ok
 
 ----------------------------------------------------------------------
-Ran 159 tests in 158.321s
+Ran 159 tests in 42.578s
 
 OK

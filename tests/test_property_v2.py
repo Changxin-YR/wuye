@@ -81,6 +81,12 @@ class PropertyV2Tests(unittest.TestCase):
         self.assertEqual([row['id'] for row in houses['items']], [house])
         people = self.tool('person.search', {'name': '王五'}, op='lookup')
         self.assertEqual([row['name'] for row in people['items']], ['王五'])
+
+    def test_agent_notice_read_alias_returns_scoped_notices(self):
+        self.setup_house()
+        self.call('notice.save', {'community_id': 1, 'title': '停水通知', 'content': '今晚检修'})
+        result = self.tool('notice.read', {}, op='lookup')
+        self.assertEqual([row['title'] for row in result['items']], ['停水通知'])
     def test_customer_dispatch_engineer_complete_and_verify(self):
         b,u,h=self.setup_house();pid=self.person();self.call('relation.bind',{'house_id':h,'person_id':pid,'kind':'owner'})
         cs=self.staff('service','customer_service');worker=self.staff('engineer','engineer','assigned');other=self.staff('other','engineer','assigned')
