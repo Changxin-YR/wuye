@@ -1,0 +1,85 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "美家物业 Agent 工具",
+    "version": "2.1.0",
+    "description": "当前登录用户的受控数字代理工具。权限由后端实时 RBAC + DataScope 决定；R0只读、R1普通可恢复写入、R2重要关系/状态变更按策略自动或确认、R3删除/财务/权限等高风险操作必须由登录用户在浏览器确认。Agent 不接受 SQL/角色伪造，也不直接访问数据库。"
+  },
+  "servers": [
+    {
+      "url": "http://host.docker.internal:5000"
+    }
+  ],
+  "paths": {
+    "/api/agent/tools": {
+      "post": {
+        "operationId": "property_agent_tool",
+        "summary": "按当前登录身份查询或办理业务；服务端实时复核权限、数据范围、风险、版本与业务状态",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "request_token",
+                  "operation"
+                ],
+                "properties": {
+                  "request_token": {
+                    "type": "string",
+                    "description": "Dify 外部工具回调使用的当前轮次短期委托令牌。数据库只保存哈希，最长约3分钟；不能沿用上一轮。默认百炼本地 Tool 回调无需把令牌交给模型。"
+                  },
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "context",
+                      "lookup",
+                      "execute",
+                      "propose"
+                    ],
+                    "description": "context取得后端身份/权限/能力目录；lookup执行R0只读查询；execute按后端风险策略自动执行R1/允许自动的R2，或返回待确认项；propose只预检并生成待确认项。R3永不由模型直接确认。"
+                  },
+                  "command": {
+                    "type": "string",
+                    "description": "只能从context.commands或context.queries选择；命令对应服务端 Permission，并再次执行 DataScope 校验。不得发明命令、SQL、user_id/role身份字段。"
+                  },
+                  "arguments_json": {
+                    "type": "string",
+                    "description": "业务参数JSON字符串。绑定示例：{\"building_name\":\"23栋\",\"room_no\":311,\"person_name\":\"王五\"}。修改已有记录须先lookup取得真实id和version；同名必须补充phone，不能猜测。"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "查询结果或最小披露的操作回执。status=executed表示业务服务已执行且回读验证；pending表示等待当前登录用户确认。"
+          },
+          "400": {
+            "description": "参数错误"
+          },
+          "401": {
+            "description": "本次授权无效/过期"
+          },
+          "403": {
+            "description": "当前用户权限不足、数据范围不允许或本轮授权指纹已变化"
+          },
+          "409": {
+            "description": "状态/版本冲突"
+          },
+          "404": {
+            "description": "目标不存在或不可访问"
+          },
+          "429": {
+            "description": "本轮或本账号请求过多"
+          },
+          "410": {
+            "description": "待确认操作已过期"
+          }
+        }
+      }
+    }
+  }
+}

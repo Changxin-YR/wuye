@@ -1,0 +1,6 @@
+{% extends 'base.html' %}{% block title %}登录 · 美家物业{% endblock %}
+{% block auth_content %}
+<main class="auth-page"><div class="auth-glow"></div><section class="auth-card"><div class="auth-logo"><span class="brand-mark">美</span></div><span class="eyebrow">MEIJIA PROPERTY</span><h1>欢迎回来</h1><p class="muted">登录美家物业，继续处理社区服务</p>
+{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>用户名<input name="username" autocomplete="username" required autofocus></label><label>密码<input type="password" name="password" autocomplete="current-password" required></label><button class="primary full">登录</button></form><p class="auth-switch">还没有账号？<a href="{{ url_for('register') }}">立即注册</a></p></section></main>
+{% endblock %}

@@ -1,0 +1,106 @@
+test_agent (unittest.loader._FailedTest.test_agent) ... ERROR
+test_legacy_short_lived_token_remains_compatible (test_agent_security_static.AgentSecurityPrimitiveTests.test_legacy_short_lived_token_remains_compatible) ... ok
+test_model_record_uses_minimum_disclosure (test_agent_security_static.AgentSecurityPrimitiveTests.test_model_record_uses_minimum_disclosure) ... ok
+test_provider_output_scrubs_current_grant (test_agent_security_static.AgentSecurityPrimitiveTests.test_provider_output_scrubs_current_grant) ... ok
+test_r2_auto_policy_can_be_made_stricter_but_not_upgrade_r3 (test_agent_security_static.AgentSecurityPrimitiveTests.test_r2_auto_policy_can_be_made_stricter_but_not_upgrade_r3) ... ok
+test_risk_and_execution_modes (test_agent_security_static.AgentSecurityPrimitiveTests.test_risk_and_execution_modes) ... ok
+test_runtime_grant_detects_scope_change (test_agent_security_static.AgentSecurityPrimitiveTests.test_runtime_grant_detects_scope_change) ... ok
+test_app (unittest.loader._FailedTest.test_app) ... ERROR
+test_chat_stream_emits_text_deltas_and_uses_stream_payload (test_bailian.BailianClientTests.test_chat_stream_emits_text_deltas_and_uses_stream_payload) ... ok
+test_chat_stream_merges_tool_call_fragments_before_callback (test_bailian.BailianClientTests.test_chat_stream_merges_tool_call_fragments_before_callback) ... ok
+test_chat_uses_openai_compatible_payload (test_bailian.BailianClientTests.test_chat_uses_openai_compatible_payload) ... ok
+test_check_and_safe_errors (test_bailian.BailianClientTests.test_check_and_safe_errors) ... ok
+test_timeout_is_bounded (test_bailian.BailianClientTests.test_timeout_is_bounded) ... ok
+test_dify (unittest.loader._FailedTest.test_dify) ... ERROR
+test_migration (unittest.loader._FailedTest.test_migration) ... ERROR
+test_property_v2 (unittest.loader._FailedTest.test_property_v2) ... ERROR
+
+======================================================================
+ERROR: test_agent (unittest.loader._FailedTest.test_agent)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_agent
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/unittest/loader.py", line 396, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib/python3.13/unittest/loader.py", line 339, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/mnt/data/tangli_miao_work/tangli_miao/tests/test_agent.py", line 10, in <module>
+    import test_app as fixtures
+  File "/mnt/data/tangli_miao_work/tangli_miao/tests/test_app.py", line 11, in <module>
+    from werkzeug.security import generate_password_hash
+ModuleNotFoundError: No module named 'werkzeug'
+
+
+======================================================================
+ERROR: test_app (unittest.loader._FailedTest.test_app)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_app
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/unittest/loader.py", line 396, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib/python3.13/unittest/loader.py", line 339, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/mnt/data/tangli_miao_work/tangli_miao/tests/test_app.py", line 11, in <module>
+    from werkzeug.security import generate_password_hash
+ModuleNotFoundError: No module named 'werkzeug'
+
+
+======================================================================
+ERROR: test_dify (unittest.loader._FailedTest.test_dify)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_dify
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/unittest/loader.py", line 396, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib/python3.13/unittest/loader.py", line 339, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/mnt/data/tangli_miao_work/tangli_miao/tests/test_dify.py", line 12, in <module>
+    from werkzeug.serving import make_server,WSGIRequestHandler
+ModuleNotFoundError: No module named 'werkzeug'
+
+
+======================================================================
+ERROR: test_migration (unittest.loader._FailedTest.test_migration)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_migration
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/unittest/loader.py", line 396, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib/python3.13/unittest/loader.py", line 339, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/mnt/data/tangli_miao_work/tangli_miao/tests/test_migration.py", line 9, in <module>
+    from app import create_app
+  File "/mnt/data/tangli_miao_work/tangli_miao/app.py", line 15, in <module>
+    from flask import Flask, Response, abort, flash, g, jsonify, make_response, redirect, render_template, request, send_from_directory, session, stream_with_context, url_for
+ModuleNotFoundError: No module named 'flask'
+
+
+======================================================================
+ERROR: test_property_v2 (unittest.loader._FailedTest.test_property_v2)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_property_v2
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/unittest/loader.py", line 396, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib/python3.13/unittest/loader.py", line 339, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/mnt/data/tangli_miao_work/tangli_miao/tests/test_property_v2.py", line 8, in <module>
+    from werkzeug.security import generate_password_hash
+ModuleNotFoundError: No module named 'werkzeug'
+
+
+----------------------------------------------------------------------
+Ran 16 tests in 1.030s
+
+FAILED (errors=5)
+当前最终验证（2026-09-07，Windows 真实开发环境）：
+
+执行命令：`python -m unittest discover -s tests -v`
+结果：`Ran 131 tests ... OK`。
+
+`python -m compileall -q .` 通过；部署环境 `python manage.py diagnose --ai --infer` 通过。下方旧记录保留作历史背景，不代表当前状态。

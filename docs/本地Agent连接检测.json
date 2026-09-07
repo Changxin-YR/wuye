@@ -1,0 +1,5 @@
+{
+  "status": "unverified",
+  "code": "connection",
+  "message": "无法连接AI服务，请管理员检查Dify及模型服务。"
+}

@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }} · 美家物业{% endblock %}
+{% block heading %}{{ title }}{% endblock %}
+{% block content %}
+<section class="panel">
+<div class="section-head"><div><h2>{{ title }}</h2><p class="muted">共 {{ total }} 条，显示当前账号可访问的记录</p></div>{% if create %}<a class="btn primary" href="{{ url_for('management.operation', command=create) }}">{{ action_names[create] }}</a>{% endif %}</div>
+<form class="filters" method="get"><input name="q" value="{{ q }}" placeholder="搜索姓名、房号、标题或编号"><button class="btn" type="submit">搜索</button><a class="btn" href="{{ url_for('management.page',name=module) }}">重置</a></form>
+{% if module == 'bills' %}<p>{% if business_can('billing.manage') %}<a class="btn" href="{{ url_for('management.operation',command='bill.batch') }}">批量生成月账单</a>{% endif %}{% if business_can('billing.collect') %}<a class="btn" href="{{ url_for('management.operation',command='payment.record') }}">登记收款</a>{% endif %}</p><div data-report="/api/reports/finance" class="report-strip"></div>{% endif %}
+{% if module == 'complaints' %}<div data-report="/api/reports/complaints" class="report-strip"></div>{% endif %}
+<div class="table-wrap"><table><thead><tr>{% for k in columns %}<th>{{ business_labels.get(k,k) }}</th>{% endfor %}<th>操作</th></tr></thead><tbody>
+{% for row in rows %}<tr>{% for k in columns %}<td>{% if k == 'status' %}{{ business_status(row) }}{% else %}{{ business_display(row[k],k) }}{% endif %}</td>{% endfor %}<td><a href="{{ url_for('management.detail_page',name=module,id=row.id if row.id is defined else row.code) }}">详情 / 办理</a></td></tr>{% else %}<tr><td colspan="{{ columns|length+1 }}" class="empty">暂无记录{% if create %}，可从右上角开始登记{% endif %}</td></tr>{% endfor %}</tbody></table></div>
+<div class="pagination">{% if page>1 %}<a href="{{ url_for('management.page',name=module,page=page-1,q=q) }}">上一页</a>{% endif %}<span>第 {{ page }} 页</span>{% if page*25<total %}<a href="{{ url_for('management.page',name=module,page=page+1,q=q) }}">下一页</a>{% endif %}</div>
+</section>
+{% endblock %}

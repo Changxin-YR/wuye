@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="app-root" content="{{ request.script_root }}">
+  <title>{% block title %}美家物业{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% if current_user %}
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">美</span><span><b>美家物业</b><small>社区服务工作台</small></span></a>
+    <nav>
+      <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' else '' }}">工作台</a>
+      {% for key,label in business_menu %}<a href="{{ url_for('management.page',name=key) }}" class="{{ 'active' if request.view_args and request.view_args.get('name') == key else '' }}">{{ label }}</a>{% endfor %}
+      <a href="{{ url_for('notifications') }}">站内通知{% if unread_count %}（{{ unread_count }}）{% endif %}</a>
+      <a href="{{ url_for('ai_page') }}">AI 助手</a>
+      <a href="{{ url_for('profile') }}">个人资料</a>
+    </nav>
+    <div class="sidebar-user">{% if current_user.avatar %}<img class="avatar avatar-image" src="{{ current_user.avatar }}" alt="头像">{% else %}<div class="avatar">{{ current_user.username[:1]|upper }}</div>{% endif %}<div><strong>{{ current_user.real_name or current_user.username }}</strong><small>{{ business_role_names }}</small></div><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="logout" type="submit">退出</button></form></div>
+  </aside>
+  <main class="content">
+    <header class="topbar"><div><span class="eyebrow">MEIJIA PROPERTY</span><h1>{% block heading %}工作台{% endblock %}</h1></div><a class="top-action" href="{{ url_for('ai_page') }}">询问 AI <span>↗</span></a></header>
+    {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% else %}{% block auth_content %}{% endblock %}{% endif %}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/management.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{% extends 'base.html' %}{% block heading %}{{ title }}{% endblock %}{% block content %}
+<section class="panel form-panel"><h2>{{ title }}</h2>
+{% if command=='payment.record' %}<p class="muted">现金或银行渠道用于登记已经核验到账的款项。请核对真实收据或银行流水，提交后会更新应收余额。</p>{% endif %}
+{% if command=='payment.reverse' %}<p class="muted">此操作冲销收款记录并恢复应收余额。请先核验实际资金的退回情况。</p>{% endif %}
+<form method="post" class="business-form" data-business-command="{{ command }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="request_key" value="{{ request_key }}">
+<div class="form-grid">{% for key in fields %}
+{% if key in ['id','version','auth_version'] %}{% if values.get(key) %}<input type="hidden" name="{{ key }}" value="{{ values[key] }}">{% endif %}
+{% else %}<label class="field"><span>{{ business_labels.get(key,key) }}{% if key not in optional %} *{% endif %}</span>
+{% if key in refs %}<input type="search" class="reference-search" data-for="{{ key }}" placeholder="输入关键词筛选{{ business_labels.get(key,key) }}" aria-label="搜索{{ business_labels.get(key,key) }}"><select name="{{ key }}" data-reference="{{ refs[key] }}" data-selected="{{ values.get(key,'') }}" {% if key=='person_ids' %}multiple size="5"{% endif %} {% if key not in optional %}required{% endif %}><option value="">请选择{{ business_labels.get(key,key) }}</option>{% if values.get(key) %}<option value="{{ values[key] }}" selected>当前记录 #{{ values[key] }}</option>{% endif %}</select>{% if key=='person_ids' %}<small>可按住 Ctrl 多选共同入住人员</small>{% endif %}
+{% elif key in enums %}<select name="{{ key }}" {% if key in ['role_codes','permissions'] %}multiple size="6" data-code-list{% endif %}><option value="">请选择</option>{% for v,label in enums[key].items() %}<option value="{{ v }}" {% if values.get(key)|string==v|string or (key in ['role_codes','permissions'] and v in values.get(key,'').split(',')) %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+{% elif key in ['content','reason','remark','note','resolution','checklist','findings'] %}<textarea name="{{ key }}" rows="4" {% if key not in optional %}required{% endif %}>{{ values.get(key,'') }}</textarea>
+{% else %}<input name="{{ key }}" value="{{ values.get(key,'') }}" type="{{ 'password' if key=='password' else 'date' if key in ['start_date','end_date','due_date'] else 'datetime-local' if key in ['move_in','expected_at','due_at'] else 'month' if key=='period' else 'number' if key in ['room_no','floors','score','area','rate','amount'] else 'text' }}" {% if key in ['area','rate','amount'] %}step="{{ '0.0001' if key=='rate' else '0.01' }}" min="0.01"{% endif %} {% if key not in optional %}required{% endif %} {% if key=='password' %}minlength="8" maxlength="128" autocomplete="new-password"{% endif %}>
+{% endif %}</label>{% endif %}{% endfor %}</div>
+{% if high %}<label class="confirm-line"><input type="checkbox" name="confirmed" value="1" required>我已核验对象、资料与影响，确认执行{{ title }}</label>{% endif %}
+<p class="form-error" role="alert" hidden></p><button class="btn primary" type="submit">{{ '确认提交' if high else '保存并提交' }}</button><a class="btn" href="{{ url_for('dashboard') }}">返回工作台</a>
+</form></section>{% endblock %}
