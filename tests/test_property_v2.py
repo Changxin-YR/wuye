@@ -75,6 +75,12 @@ class PropertyV2Tests(unittest.TestCase):
         self.tool('relation.bind_by_name',{'building_name':'23栋','room_no':311,'person_name':'不存在'},expected=404)
         self.tool('relation.bind_by_name',{'building_name':'不存在','room_no':999,'person_name':'王五'},expected=404)
         self.tool('staff.roles',{'id':uid,'auth_version':2,'role_codes':['superadmin'],'scope_kind':'all','reason':'提权'},uid=uid,expected=403)
+    def test_agent_query_common_aliases_are_scoped(self):
+        building, _, house = self.setup_house(); self.person()
+        houses = self.tool('house.search', {'building_id': building, 'id': house}, op='lookup')
+        self.assertEqual([row['id'] for row in houses['items']], [house])
+        people = self.tool('person.search', {'name': '王五'}, op='lookup')
+        self.assertEqual([row['name'] for row in people['items']], ['王五'])
     def test_customer_dispatch_engineer_complete_and_verify(self):
         b,u,h=self.setup_house();pid=self.person();self.call('relation.bind',{'house_id':h,'person_id':pid,'kind':'owner'})
         cs=self.staff('service','customer_service');worker=self.staff('engineer','engineer','assigned');other=self.staff('other','engineer','assigned')

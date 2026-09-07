@@ -9,18 +9,37 @@ from agent_security import safe_record
 QUERIES={'house.search':'property.read','person.search':'person.read','person.properties':'person.read','order.search':'order.read','order.pending':'order.read','billing.unpaid':'billing.read','complaint.stats':'complaint.handle','whoami':'notice.read'}
 def query(db,actor,command,args):
     if command not in QUERIES or not isinstance(args,dict):abort(400,description='无效查询')
-    if set(args)-{'community_id','building_name','unit','room_no','person_name','phone','month','status','q'}:abort(400,description='查询包含未知参数')
+    args=dict(args)
+    # Models commonly use these read-only aliases; normalize them before the
+    # strict whitelist so scope checks still run on the canonical fields.
+    if command in {'person.search','person.properties'}:
+        if 'person_name' not in args:
+            for alias in ('name','q','keywords'):
+                if alias in args:
+                    args['person_name']=args.pop(alias);break
+        if command=='person.properties' and 'person_id' not in args and 'id' in args:
+            args['person_id']=args.pop('id')
+    if command.startswith('order.') and 'order_no' not in args and 'q' in args:
+        args['order_no']=args.pop('q')
+    allowed={'community_id','building_id','building_name','unit','room_no','id','person_id','person_name','phone','month','status','q','order_no'}
+    if set(args)-allowed:abort(400,description='查询包含未知参数')
     if any(not isinstance(v,(str,int)) or isinstance(v,bool) for v in args.values()):abort(400)
     p=Policy(db,actor);p.require(QUERIES[command])
     if command=='whoami':return p.identity()
     if command.startswith('house.') or command in {'person.properties','billing.unpaid'}:
         hq=p.query(House)
+        if args.get('id'):hq=hq.where(House.id==args['id'])
+        if args.get('building_id'):hq=hq.where(House.building_id==args['building_id'])
         for key in ['community_id','building_name','unit','room_no']:
             if args.get(key):hq=hq.where(getattr(House,key)==args[key])
         if command=='person.properties':
+            person_id=args.get('person_id')
             name=str(args.get('person_name','')).strip()
-            if not name:abort(400,description='请提供人员姓名')
-            pq=p.query(Person).where(Person.name==name)
+            if person_id:
+                pq=p.query(Person).where(Person.id==person_id)
+            else:
+                if not name:abort(400,description='请提供人员姓名')
+                pq=p.query(Person).where(Person.name==name)
             if args.get('phone'):pq=pq.where(Person.phone==args['phone'])
             people=list(db.scalars(pq.limit(2)))
             if not people:abort(404,description='未找到该人员')
@@ -32,10 +51,13 @@ def query(db,actor,command,args):
         else:q=hq
     elif command=='person.search':
         q=p.query(Person)
+        if args.get('id'):q=q.where(Person.id==args['id'])
         if args.get('person_name'):q=q.where(Person.name==args['person_name'])
         if args.get('phone'):q=q.where(Person.phone==args['phone'])
     elif command.startswith('order.'):
         q=p.query(WorkOrder)
+        if args.get('id'):q=q.where(WorkOrder.id==args['id'])
+        if args.get('order_no'):q=q.where(WorkOrder.order_no==args['order_no'])
         if command=='order.pending':q=q.where(WorkOrder.status.in_([0,1,2,3]))
         if args.get('q'):q=q.where(WorkOrder.title.contains(str(args['q'])[:100],autoescape=True))
     else:

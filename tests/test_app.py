@@ -265,6 +265,20 @@ class PropertyAppContractTests(unittest.TestCase):
         body=response.get_data(as_text=True)
         self.assertIn('流式',body);self.assertIn('回答',body)
         with self.db() as db:self.assertEqual(db.scalar(select(func.count(AiConversation.id))),1)
+
+    def test_ai_blocks_repeated_mutation_command_in_one_turn(self):
+        class DuplicateClient(BailianClient):
+            def chat(self, query, user, conversation_id='', tool_callback=None, system_prompt=''):
+                base={'operation':'execute','command':'order.create','arguments_json':'{"house_id":1,"title":"重复报修","content":"水管漏水","type":"水电故障","location":"厨房","contact_name":"住户","contact_phone":"13800000000"}'}
+                tool_callback(base)
+                tool_callback({**base,'arguments_json':'{"house_id":1,"title":"重复报修","content":"水管漏水","type":"水电故障","location":"厨房水槽","contact_name":"住户","contact_phone":"13800000000"}'})
+                return {'answer':'已处理','conversation_id':'duplicate-check'}
+
+        self.login()
+        self.app.extensions['dify']=DuplicateClient('http://127.0.0.1:1','fixture-key')
+        response=self.json_post('/ai/chat',{'message':'再提交一次刚才的报修'})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.count(WorkOrder),1)
     def test_owner_cannot_run_ai_admin_probe(self):
         self.login();self.assertEqual(self.json_post('/ai/check',{}).status_code,403)
     def test_ai_filters_context_and_keeps_conversation_private(self):

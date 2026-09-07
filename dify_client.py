@@ -97,7 +97,7 @@ class BailianClient:
     def chat_stream(self,query,user,conversation_id='',tool_callback=None,system_prompt=''):
         messages=([{'role':'system','content':system_prompt}] if isinstance(system_prompt,str) and system_prompt.strip() else [])+[{'role':'user','content':query}]
         seen_tool_calls=set()
-        tools=[{'type':'function','function':{'name':'property_agent_tool','description':'查询授权物业数据或办理业务。高风险操作只生成待确认卡片。','parameters':{'type':'object','properties':{'request_token':{'type':'string'},'operation':{'type':'string','enum':['context','lookup','execute','propose']},'command':{'type':'string'},'arguments_json':{'type':'string'}},'required':['operation']}}}]
+        tools=[{'type':'function','function':{'name':'property_agent_tool','description':'查询授权物业数据或办理业务。command 必须使用 context 返回的 queries 或 commands，禁止猜测隐藏命令；高风险操作只生成待确认卡片。','parameters':{'type':'object','properties':{'request_token':{'type':'string'},'operation':{'type':'string','enum':['context','lookup','execute','propose']},'command':{'type':'string','description':'仅使用 context.queries 或 context.commands 中的命令'},'arguments_json':{'type':'string','description':'JSON 对象；先 lookup 获取真实 id/version，再执行或 propose'}},'required':['operation']}}}]
         for _ in range(6):
             payload={'model':self.model,'messages':messages,'stream':True}
             if tool_callback:payload['tools']=tools;payload['tool_choice']='auto'
@@ -128,7 +128,7 @@ class BailianClient:
     def chat(self,query,user,conversation_id='',tool_callback=None,system_prompt=''):
         messages=([{'role':'system','content':system_prompt}] if isinstance(system_prompt,str) and system_prompt.strip() else [])+[{'role':'user','content':query}]
         seen_tool_calls=set()
-        tools=[{'type':'function','function':{'name':'property_agent_tool','description':'查询授权物业数据或办理业务。高风险操作只生成待确认卡片。','parameters':{'type':'object','properties':{'request_token':{'type':'string'},'operation':{'type':'string','enum':['context','lookup','execute','propose']},'command':{'type':'string'},'arguments_json':{'type':'string'}},'required':['operation']}}}]
+        tools=[{'type':'function','function':{'name':'property_agent_tool','description':'查询授权物业数据或办理业务。command 必须使用 context 返回的 queries 或 commands，禁止猜测隐藏命令；高风险操作只生成待确认卡片。','parameters':{'type':'object','properties':{'request_token':{'type':'string'},'operation':{'type':'string','enum':['context','lookup','execute','propose']},'command':{'type':'string','description':'仅使用 context.queries 或 context.commands 中的命令'},'arguments_json':{'type':'string','description':'JSON 对象；先 lookup 获取真实 id/version，再执行或 propose'}},'required':['operation']}}}]
         for _ in range(6):
             payload={'model':self.model,'messages':messages,'stream':False}
             if tool_callback:payload['tools']=tools;payload['tool_choice']='auto'

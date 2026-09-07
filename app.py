@@ -482,6 +482,7 @@ def create_app(test_config=None):
             # three-minute delegated token. Provider output is scrubbed before UI.
             prompt=(AGENT_SYSTEM_PROMPT+'\n本次request_token：'+token+'\n授权数据：'+json.dumps(context,ensure_ascii=False)+'\n用户请求：'+message.strip())
             system_instruction=''
+        mutation_commands=set()
         def bailian_tool(args):
             try:
                 grant,actor=grant_actor(g.db,token if is_bailian else args.get('request_token'))
@@ -492,9 +493,13 @@ def create_app(test_config=None):
                 params=json.loads(raw)
                 if operation=='lookup':return domain_query(g.db,actor,args.get('command'),params)
                 if operation not in {'execute','propose'}:return {'error':'工具操作类型无效'}
+                command=args.get('command')
+                if command in mutation_commands:return {'error':'本轮已处理该业务命令，请先查看结果再继续'}
                 from agent_tools import perform
-                item=perform(g.db,actor,grant,args.get('command'),params) if operation=='execute' else propose(g.db,actor,grant,args.get('command'),params)
-                result_view=action_view(item,model_safe=True);g.db.commit();return result_view
+                item=perform(g.db,actor,grant,command,params) if operation=='execute' else propose(g.db,actor,grant,command,params)
+                result_view=action_view(item,model_safe=True)
+                if result_view.get('status') in {'executed','pending'}:mutation_commands.add(command)
+                g.db.commit();return result_view
             except (HTTPException,ValueError,TypeError,KeyError) as exc:
                 g.db.rollback();return {'error':getattr(exc,'description',str(exc))[:300],'code':error_code_for(getattr(exc,'code',400) or 400,getattr(exc,'description',str(exc)))}
         if payload.get('stream') is True:
@@ -542,21 +547,6 @@ def create_app(test_config=None):
         if not ai_slots.acquire(blocking=False):
             grant=g.db.get(AiGrant,gid);grant.expires_at=utcnow();g.db.commit();return jsonify(error='AI正在处理其他任务，请稍后再试'),429
         try:
-            def bailian_tool(args):
-                try:
-                    grant,actor=grant_actor(g.db,token if is_bailian else args.get('request_token'))
-                    operation=args.get('operation')
-                    if operation=='context':return ai_context()[0]
-                    raw=args.get('arguments_json','{}')
-                    if not isinstance(raw,str) or len(raw)>10000:return {'error':'arguments_json无效'}
-                    params=json.loads(raw)
-                    if operation=='lookup':return domain_query(g.db,actor,args.get('command'),params)
-                    if operation not in {'execute','propose'}:return {'error':'工具操作类型无效'}
-                    from agent_tools import perform
-                    item=perform(g.db,actor,grant,args.get('command'),params) if operation=='execute' else propose(g.db,actor,grant,args.get('command'),params)
-                    result_view=action_view(item,model_safe=True);g.db.commit();return result_view
-                except (HTTPException,ValueError,TypeError,KeyError) as exc:
-                    g.db.rollback();return {'error':getattr(exc,'description',str(exc))[:300],'code':error_code_for(getattr(exc,'code',400) or 400,getattr(exc,'description',str(exc)))}
             try:
                 if isinstance(app.extensions['dify'],BailianClient):result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream,bailian_tool,system_prompt=system_instruction)
                 else:result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream)
