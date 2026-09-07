@@ -105,12 +105,13 @@ Agent 审计记录包含操作人、角色、来源、命令、目标、风险/�
 
 ## Bug 列表
 
-本轮复现并修复 2 个产品缺陷；另修正 3 个验收夹具问题。未复现 P0。
+本轮复现 3 个 Agent 缺陷，其中 2 个已修复、1 个开放；另修正 3 个验收夹具问题。未复现 P0。
 
 | ID | 严重度 | 模块 | 复现与原因 | 修复与验证 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | P1-001 | P1 | `/ai/chat` Agent 写入 | 同一回合对 `order.create` 渐进补参会提交多个不同 payload，原有 payload 幂等键无法阻止重复业务行和通知。 | 回合内对已成功 `execute/propose` 的命令去重；新增 `test_ai_blocks_repeated_mutation_command_in_one_turn`，SQLite/MySQL 全量通过；commit `d65fddf`。 | 已修复 |
 | P1-002 | P1 | Agent 自然语言路由 | 50 条真实百炼语料中部分命令循环或未完成，归一化工具命中 34/50（68%）。 | 已加强 function schema 和只读参数归一化；再次真实运行仍为 34/50，需后续提示/语料优化。当前无修复 commit。 | 开放，阻止 A |
+| P1-003 | P1 | Agent 只读查询 | 模型常用 `id`、`building_id`、`name/q`、`order_no` 参数原先被白名单拒绝，导致合法查询 400 和工具循环。 | 在 `business_queries.query` 做只读别名归一化，继续使用原有 Policy/DataScope；新增 `test_agent_query_common_aliases_are_scoped`，SQLite/MySQL 全量通过；commit `d65fddf`。 | 已修复 |
 
 验收夹具问题：红队脚本根路径、`Person.user_id` 重复插入、外键提交顺序均已修正并重新运行。上述产品修复保持现有技术栈、权限模型和数据库约束不变。
 
