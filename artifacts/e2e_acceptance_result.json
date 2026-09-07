@@ -1,0 +1,125 @@
+{
+  "pages": [
+    {
+      "module": "communities",
+      "status": 200,
+      "title": "小区 · 美家物业"
+    },
+    {
+      "module": "buildings",
+      "status": 200,
+      "title": "楼栋 · 美家物业"
+    },
+    {
+      "module": "units",
+      "status": 200,
+      "title": "单元 · 美家物业"
+    },
+    {
+      "module": "houses",
+      "status": 200,
+      "title": "房屋 · 美家物业"
+    },
+    {
+      "module": "people",
+      "status": 200,
+      "title": "人员档案 · 美家物业"
+    },
+    {
+      "module": "relations",
+      "status": 200,
+      "title": "房屋人员关系 · 美家物业"
+    },
+    {
+      "module": "leases",
+      "status": 200,
+      "title": "租户与租赁 · 美家物业"
+    },
+    {
+      "module": "staff",
+      "status": 200,
+      "title": "账号与岗位 · 美家物业"
+    },
+    {
+      "module": "roles",
+      "status": 200,
+      "title": "角色权限 · 美家物业"
+    },
+    {
+      "module": "work-orders",
+      "status": 200,
+      "title": "维修工单 · 美家物业"
+    },
+    {
+      "module": "complaints",
+      "status": 200,
+      "title": "投诉建议 · 美家物业"
+    },
+    {
+      "module": "notices",
+      "status": 200,
+      "title": "公告通知 · 美家物业"
+    },
+    {
+      "module": "visitors",
+      "status": 200,
+      "title": "访客登记 · 美家物业"
+    },
+    {
+      "module": "vehicles",
+      "status": 200,
+      "title": "车辆 · 美家物业"
+    },
+    {
+      "module": "parking",
+      "status": 200,
+      "title": "车位 · 美家物业"
+    },
+    {
+      "module": "parking-uses",
+      "status": 200,
+      "title": "车位使用记录 · 美家物业"
+    },
+    {
+      "module": "devices",
+      "status": 200,
+      "title": "设备设施 · 美家物业"
+    },
+    {
+      "module": "inspections",
+      "status": 200,
+      "title": "巡检任务 · 美家物业"
+    },
+    {
+      "module": "fees",
+      "status": 200,
+      "title": "收费项目 · 美家物业"
+    },
+    {
+      "module": "bills",
+      "status": 200,
+      "title": "应收账单 · 美家物业"
+    },
+    {
+      "module": "payments",
+      "status": 200,
+      "title": "收款与冲销 · 美家物业"
+    },
+    {
+      "module": "audit",
+      "status": 200,
+      "title": "操作审计 · 美家物业"
+    }
+  ],
+  "writes": [
+    "building.save",
+    "unit.save",
+    "house.save",
+    "person.save",
+    "order.create"
+  ],
+  "validation": {
+    "required_fields": true
+  },
+  "screenshot": "C:\\Users\\27363\\Desktop\\tangli_miao\\artifacts\\e2e-work-orders.png"
+}
