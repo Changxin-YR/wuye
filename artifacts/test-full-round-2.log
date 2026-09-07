@@ -1,0 +1,203 @@
+test_admin_bind_and_notice_proposals_dry_run_and_execute (test_agent.AgentTests.test_admin_bind_and_notice_proposals_dry_run_and_execute) ... ok
+test_agent_whole_order_lifecycle (test_agent.AgentTests.test_agent_whole_order_lifecycle) ... ok
+test_cancel_or_expired_action_cannot_execute (test_agent.AgentTests.test_cancel_or_expired_action_cannot_execute) ... ok
+test_confirm_creates_once_and_audits (test_agent.AgentTests.test_confirm_creates_once_and_audits) ... ok
+test_confirm_requires_csrf (test_agent.AgentTests.test_confirm_requires_csrf) ... ok
+test_context_role_scope_and_no_passwords (test_agent.AgentTests.test_context_role_scope_and_no_passwords) ... ok
+test_disabled_session_cannot_confirm (test_agent.AgentTests.test_disabled_session_cannot_confirm) ... ok
+test_failed_commit_rolls_back_execution_and_status (test_agent.AgentTests.test_failed_commit_rolls_back_execution_and_status) ... [2026-09-07 23:07:19,854] ERROR in app: database_transaction_failed
+[2026-09-07 23:07:19,856] ERROR in app: audit_write_failed trace=7439291f5496400d988a710c4abe7bf7
+ok
+test_foreign_action_cannot_read_confirm_cancel (test_agent.AgentTests.test_foreign_action_cannot_read_confirm_cancel) ... ok
+test_grant_does_not_bypass_confirmation_login (test_agent.AgentTests.test_grant_does_not_bypass_confirmation_login) ... ok
+test_grant_revoked_by_password_change (test_agent.AgentTests.test_grant_revoked_by_password_change) ... ok
+test_missing_or_expired_grant (test_agent.AgentTests.test_missing_or_expired_grant) ... ok
+test_owner_cannot_propose_admin_or_impersonate (test_agent.AgentTests.test_owner_cannot_propose_admin_or_impersonate) ... ok
+test_proposal_has_no_business_side_effects (test_agent.AgentTests.test_proposal_has_no_business_side_effects) ... ok
+test_proposal_limit (test_agent.AgentTests.test_proposal_limit) ... ok
+test_stale_order_proposal_rejected (test_agent.AgentTests.test_stale_order_proposal_rejected) ... ok
+test_tool_cannot_confirm (test_agent.AgentTests.test_tool_cannot_confirm) ... ok
+test_unknown_commands_and_bad_types_rejected (test_agent.AgentTests.test_unknown_commands_and_bad_types_rejected) ... ok
+test_user_disable_proposal_revalidates_target_version (test_agent.AgentTests.test_user_disable_proposal_revalidates_target_version) ... ok
+test_legacy_short_lived_token_remains_compatible (test_agent_security_static.AgentSecurityPrimitiveTests.test_legacy_short_lived_token_remains_compatible) ... ok
+test_model_record_uses_minimum_disclosure (test_agent_security_static.AgentSecurityPrimitiveTests.test_model_record_uses_minimum_disclosure) ... ok
+test_provider_output_scrubs_current_grant (test_agent_security_static.AgentSecurityPrimitiveTests.test_provider_output_scrubs_current_grant) ... ok
+test_r2_auto_policy_can_be_made_stricter_but_not_upgrade_r3 (test_agent_security_static.AgentSecurityPrimitiveTests.test_r2_auto_policy_can_be_made_stricter_but_not_upgrade_r3) ... ok
+test_risk_and_execution_modes (test_agent_security_static.AgentSecurityPrimitiveTests.test_risk_and_execution_modes) ... ok
+test_runtime_grant_detects_scope_change (test_agent_security_static.AgentSecurityPrimitiveTests.test_runtime_grant_detects_scope_change) ... ok
+test_account_locks_after_five_bad_passwords (test_app.PropertyAppContractTests.test_account_locks_after_five_bad_passwords) ... ok
+test_admin_cannot_disable_self (test_app.PropertyAppContractTests.test_admin_cannot_disable_self) ... ok
+test_admin_creates_worker (test_app.PropertyAppContractTests.test_admin_creates_worker) ... ok
+test_admin_house_bind_and_unbind (test_app.PropertyAppContractTests.test_admin_house_bind_and_unbind) ... ok
+test_ai_blocks_repeated_mutation_command_in_one_turn (test_app.PropertyAppContractTests.test_ai_blocks_repeated_mutation_command_in_one_turn) ... ok
+test_ai_chat_stream_returns_sse_and_persists_conversation (test_app.PropertyAppContractTests.test_ai_chat_stream_returns_sse_and_persists_conversation) ... ok
+test_ai_connection_not_claimed (test_app.PropertyAppContractTests.test_ai_connection_not_claimed) ... ok
+test_ai_filters_context_and_keeps_conversation_private (test_app.PropertyAppContractTests.test_ai_filters_context_and_keeps_conversation_private) ... ok
+test_ai_frontend_prefixes_api_requests (test_app.PropertyAppContractTests.test_ai_frontend_prefixes_api_requests) ... C:\Users\27363\Desktop\tangli_miao\tests\test_app.py:109: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\27363\\Desktop\\tangli_miao\\static/js/app.js'>
+  script=self.client.get('/static/js/app.js').get_data(as_text=True)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_ai_numeric_and_non_object_inputs_rejected (test_app.PropertyAppContractTests.test_ai_numeric_and_non_object_inputs_rejected) ... ok
+test_ai_page_exposes_deployment_prefix_to_frontend (test_app.PropertyAppContractTests.test_ai_page_exposes_deployment_prefix_to_frontend) ... ok
+test_ai_scope_change_resets_upstream_context (test_app.PropertyAppContractTests.test_ai_scope_change_resets_upstream_context) ... ok
+test_ai_upstream_id_not_accepted_as_local_id (test_app.PropertyAppContractTests.test_ai_upstream_id_not_accepted_as_local_id) ... ok
+test_all_role_pages_render (test_app.PropertyAppContractTests.test_all_role_pages_render) ... ok
+test_authenticated_forms_render_csrf_token (test_app.PropertyAppContractTests.test_authenticated_forms_render_csrf_token) ... ok
+test_cancel_requires_reason (test_app.PropertyAppContractTests.test_cancel_requires_reason) ... ok
+test_cannot_cancel_in_progress (test_app.PropertyAppContractTests.test_cannot_cancel_in_progress) ... ok
+test_cannot_reassign_in_progress (test_app.PropertyAppContractTests.test_cannot_reassign_in_progress) ... ok
+test_dify_without_key_is_explicitly_unavailable (test_app.PropertyAppContractTests.test_dify_without_key_is_explicitly_unavailable) ... ok
+test_disable_busy_repairer_rejected (test_app.PropertyAppContractTests.test_disable_busy_repairer_rejected) ... ok
+test_disabled_user_session_invalidated (test_app.PropertyAppContractTests.test_disabled_user_session_invalidated) ... ok
+test_error_rolls_back_upload_and_order (test_app.PropertyAppContractTests.test_error_rolls_back_upload_and_order) ... [2026-09-07 23:07:33,481] ERROR in app: database_transaction_failed
+[2026-09-07 23:07:33,486] ERROR in app: audit_write_failed trace=7b9a9fa46e8340f0bea7c902f1f23d53
+ok
+test_finish_requires_resolution (test_app.PropertyAppContractTests.test_finish_requires_resolution) ... ok
+test_forwarded_prefix_is_used_for_subpath_deployment (test_app.PropertyAppContractTests.test_forwarded_prefix_is_used_for_subpath_deployment) ... ok
+test_full_repair_rework_evaluation_flow (test_app.PropertyAppContractTests.test_full_repair_rework_evaluation_flow) ... ok
+test_health_is_database_only (test_app.PropertyAppContractTests.test_health_is_database_only) ... ok
+test_house_cannot_bind_over_existing_owner (test_app.PropertyAppContractTests.test_house_cannot_bind_over_existing_owner) ... ok
+test_house_unbind_blocks_open_order (test_app.PropertyAppContractTests.test_house_unbind_blocks_open_order) ... ok
+test_invalid_house_action_not_success (test_app.PropertyAppContractTests.test_invalid_house_action_not_success) ... ok
+test_invalid_room_rejected (test_app.PropertyAppContractTests.test_invalid_room_rejected) ... ok
+test_login_and_registration_require_csrf (test_app.PropertyAppContractTests.test_login_and_registration_require_csrf) ... ok
+test_login_does_not_redirect_to_external_next_url (test_app.PropertyAppContractTests.test_login_does_not_redirect_to_external_next_url) ... ok
+test_login_preserves_forwarded_prefix_for_local_next_target (test_app.PropertyAppContractTests.test_login_preserves_forwarded_prefix_for_local_next_target) ... ok
+test_logout_requires_csrf_protected_post (test_app.PropertyAppContractTests.test_logout_requires_csrf_protected_post) ... ok
+test_non_image_rejected (test_app.PropertyAppContractTests.test_non_image_rejected) ... ok
+test_notice_blank_does_not_report_success (test_app.PropertyAppContractTests.test_notice_blank_does_not_report_success) ... ok
+test_notice_delete_with_invalid_id_returns_validation_error (test_app.PropertyAppContractTests.test_notice_delete_with_invalid_id_returns_validation_error) ... ok
+test_notice_edit_and_owner_read (test_app.PropertyAppContractTests.test_notice_edit_and_owner_read) ... ok
+test_notification_ownership (test_app.PropertyAppContractTests.test_notification_ownership) ... ok
+test_order_image_is_private (test_app.PropertyAppContractTests.test_order_image_is_private) ... ok
+test_order_transition_rejects_invalid_jump (test_app.PropertyAppContractTests.test_order_transition_rejects_invalid_jump) ... ok
+test_order_with_unknown_house_id_is_rejected (test_app.PropertyAppContractTests.test_order_with_unknown_house_id_is_rejected) ... ok
+test_orm_concurrent_update_detected (test_app.PropertyAppContractTests.test_orm_concurrent_update_detected) ... ok
+test_owner_cannot_claim_unbound_house (test_app.PropertyAppContractTests.test_owner_cannot_claim_unbound_house) ... ok
+test_owner_cannot_open_admin_house_page (test_app.PropertyAppContractTests.test_owner_cannot_open_admin_house_page) ... ok
+test_owner_cannot_read_another_owners_order (test_app.PropertyAppContractTests.test_owner_cannot_read_another_owners_order) ... ok
+test_owner_cannot_run_ai_admin_probe (test_app.PropertyAppContractTests.test_owner_cannot_run_ai_admin_probe) ... ok
+test_owner_cannot_use_other_house (test_app.PropertyAppContractTests.test_owner_cannot_use_other_house) ... ok
+test_pagination_and_search_preserve_scope (test_app.PropertyAppContractTests.test_pagination_and_search_preserve_scope) ... ok
+test_password_change_requires_current_password (test_app.PropertyAppContractTests.test_password_change_requires_current_password) ... ok
+test_password_change_revokes_other_sessions (test_app.PropertyAppContractTests.test_password_change_revokes_other_sessions) ... ok
+test_private_order_requires_house (test_app.PropertyAppContractTests.test_private_order_requires_house) ... ok
+test_profile_avatar_reencoded (test_app.PropertyAppContractTests.test_profile_avatar_reencoded) ... ok
+test_profile_rejects_short_password_without_success_message (test_app.PropertyAppContractTests.test_profile_rejects_short_password_without_success_message) ... ok
+test_profile_renders_uploaded_avatar (test_app.PropertyAppContractTests.test_profile_renders_uploaded_avatar) ... ok
+test_public_area_order_without_house (test_app.PropertyAppContractTests.test_public_area_order_without_house) ... ok
+test_public_owner_registration (test_app.PropertyAppContractTests.test_public_owner_registration) ... ok
+test_public_registration_cannot_choose_staff_or_admin (test_app.PropertyAppContractTests.test_public_registration_cannot_choose_staff_or_admin) ... ok
+test_reassignment_revokes_previous_worker (test_app.PropertyAppContractTests.test_reassignment_revokes_previous_worker) ... ok
+test_registration_with_invalid_role_returns_validation_error (test_app.PropertyAppContractTests.test_registration_with_invalid_role_returns_validation_error) ... ok
+test_security_headers (test_app.PropertyAppContractTests.test_security_headers) ... ok
+test_sql_injection_search_literal (test_app.PropertyAppContractTests.test_sql_injection_search_literal) ... ok
+test_stale_form_rejected (test_app.PropertyAppContractTests.test_stale_form_rejected) ... ok
+test_static_javascript_has_executable_mime_type (test_app.PropertyAppContractTests.test_static_javascript_has_executable_mime_type) ... D:\python\Lib\unittest\case.py:615: ResourceWarning: unclosed file <_io.BufferedReader name='C:\\Users\\27363\\Desktop\\tangli_miao\\static/js/app.js'>
+  result = method()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_worker_cannot_access_unassigned_order (test_app.PropertyAppContractTests.test_worker_cannot_access_unassigned_order) ... ok
+test_chat_stream_emits_text_deltas_and_uses_stream_payload (test_bailian.BailianClientTests.test_chat_stream_emits_text_deltas_and_uses_stream_payload) ... ok
+test_chat_stream_merges_tool_call_fragments_before_callback (test_bailian.BailianClientTests.test_chat_stream_merges_tool_call_fragments_before_callback) ... ok
+test_chat_uses_openai_compatible_payload (test_bailian.BailianClientTests.test_chat_uses_openai_compatible_payload) ... ok
+test_check_and_safe_errors (test_bailian.BailianClientTests.test_check_and_safe_errors) ... ok
+test_timeout_is_bounded (test_bailian.BailianClientTests.test_timeout_is_bounded) ... ok
+test_agent_mode_sse_real_http_and_conversation (test_dify.DifyWireTests.test_agent_mode_sse_real_http_and_conversation) ... ok
+test_http_and_sse_errors_are_safe (test_dify.DifyWireTests.test_http_and_sse_errors_are_safe) ... ok
+test_message_replacement (test_dify.DifyWireTests.test_message_replacement) ... ok
+test_model_failure_preserves_visible_pending_action (test_dify.DifyWireTests.test_model_failure_preserves_visible_pending_action) ... ----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 64451)
+Traceback (most recent call last):
+  File "D:\python\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\python\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\python\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "D:\python\Lib\http\server.py", line 496, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\python\Lib\http\server.py", line 484, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "C:\Users\27363\Desktop\tangli_miao\tests\test_bailian.py", line 61, in do_POST
+    return self.send_json({'id': 'chatcmpl-1', 'choices': [{'message': {'content': '百炼已收到'}}]})
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\27363\Desktop\tangli_miao\tests\test_bailian.py", line 20, in send_json
+    self.wfile.write(raw)
+    ~~~~~~~~~~~~~~~~^^^^^
+  File "D:\python\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] 你的主机中的软件中止了一个已建立的连接。
+----------------------------------------
+ok
+test_native_tool_callback_to_confirmation_roundtrip (test_dify.DifyWireTests.test_native_tool_callback_to_confirmation_roundtrip) ... ok
+test_native_tool_direct_owner_binding_real_http_persistence (test_dify.DifyWireTests.test_native_tool_direct_owner_binding_real_http_persistence) ... ok
+test_permission_revocation_during_inference_drops_answer (test_dify.DifyWireTests.test_permission_revocation_during_inference_drops_answer) ... ok
+test_timeout_is_bounded (test_dify.DifyWireTests.test_timeout_is_bounded) ... ok
+test_wrong_application_mode_explained (test_dify.DifyWireTests.test_wrong_application_mode_explained) ... ok
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 52193)
+Traceback (most recent call last):
+  File "D:\python\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\python\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\python\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "D:\python\Lib\http\server.py", line 496, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\python\Lib\http\server.py", line 484, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "C:\Users\27363\Desktop\tangli_miao\tests\test_dify.py", line 63, in do_POST
+    for item in events:self.wfile.write(('data: '+json.dumps(item,ensure_ascii=False)+'\n\n').encode());self.wfile.flush()
+                       ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\python\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] 你的主机中的软件中止了一个已建立的连接。
+----------------------------------------
+test_fresh_init_and_refuse_overwrite (test_migration.MigrationTests.test_fresh_init_and_refuse_overwrite) ... ok
+test_legacy_upgrade_preserves_data_and_requires_worker_review (test_migration.MigrationTests.test_legacy_upgrade_preserves_data_and_requires_worker_review) ... ok
+test_migrated_production_start_works (test_migration.MigrationTests.test_migrated_production_start_works) ... ok
+test_mysql_ddl_compiles (test_migration.MigrationTests.test_mysql_ddl_compiles) ... ok
+test_unmigrated_production_start_refused (test_migration.MigrationTests.test_unmigrated_production_start_refused) ... ok
+test_upgrade_is_idempotent_and_does_not_disable_verified_staff (test_migration.MigrationTests.test_upgrade_is_idempotent_and_does_not_disable_verified_staff) ... ok
+test_admin_property_owner_relationship_persists_after_reopen (test_property_v2.PropertyV2Tests.test_admin_property_owner_relationship_persists_after_reopen) ... ok
+test_agent_direct_bind_repeat_lookup_and_ambiguity (test_property_v2.PropertyV2Tests.test_agent_direct_bind_repeat_lookup_and_ambiguity) ... ok
+test_agent_missing_entities_and_no_permission (test_property_v2.PropertyV2Tests.test_agent_missing_entities_and_no_permission) ... ok
+test_agent_query_common_aliases_are_scoped (test_property_v2.PropertyV2Tests.test_agent_query_common_aliases_are_scoped) ... ok
+test_all_modules_and_operation_forms_render (test_property_v2.PropertyV2Tests.test_all_modules_and_operation_forms_render) ... ok
+test_batch_monthly_bills_are_atomic_scoped_and_repeat_safe (test_property_v2.PropertyV2Tests.test_batch_monthly_bills_are_atomic_scoped_and_repeat_safe) ... ok
+test_bill_rows_cannot_leak_across_building_scope (test_property_v2.PropertyV2Tests.test_bill_rows_cannot_leak_across_building_scope) ... ok
+test_building_data_scope_and_legacy_route_no_bypass (test_property_v2.PropertyV2Tests.test_building_data_scope_and_legacy_route_no_bypass) ... ok
+test_complaints_visitors_vehicle_parking_inspection_fault (test_property_v2.PropertyV2Tests.test_complaints_visitors_vehicle_parking_inspection_fault) ... ok
+test_coowners_family_tenant_checkout_and_history (test_property_v2.PropertyV2Tests.test_coowners_family_tenant_checkout_and_history) ... ok
+test_csrf_and_foreign_grant_cannot_impersonate (test_property_v2.PropertyV2Tests.test_csrf_and_foreign_grant_cannot_impersonate) ... ok
+test_currency_precision_and_active_equipment_prevent_bad_mutations (test_property_v2.PropertyV2Tests.test_currency_precision_and_active_equipment_prevent_bad_mutations) ... ok
+test_customer_dispatch_engineer_complete_and_verify (test_property_v2.PropertyV2Tests.test_customer_dispatch_engineer_complete_and_verify) ... ok
+test_expired_relation_does_not_authorize_resident (test_property_v2.PropertyV2Tests.test_expired_relation_does_not_authorize_resident) ... ok
+test_finance_cannot_edit_properties_or_roles (test_property_v2.PropertyV2Tests.test_finance_cannot_edit_properties_or_roles) ... ok
+test_high_risk_agent_pending_confirm_rechecks_version (test_property_v2.PropertyV2Tests.test_high_risk_agent_pending_confirm_rechecks_version) ... ok
+test_high_risk_manual_requires_confirmation (test_property_v2.PropertyV2Tests.test_high_risk_manual_requires_confirmation) ... ok
+test_idempotency_stale_updates_and_failed_attempt_audit (test_property_v2.PropertyV2Tests.test_idempotency_stale_updates_and_failed_attempt_audit) ... ok
+test_mock_channel_cannot_run_in_production_even_with_matching_marker (test_property_v2.PropertyV2Tests.test_mock_channel_cannot_run_in_production_even_with_matching_marker) ... ok
+test_money_calculation_partial_full_reversal_and_mock_isolation (test_property_v2.PropertyV2Tests.test_money_calculation_partial_full_reversal_and_mock_isolation) ... ok
+test_resident_only_current_relations (test_property_v2.PropertyV2Tests.test_resident_only_current_relations) ... ok
+test_role_change_invalidates_session_and_records_old_new_scope (test_property_v2.PropertyV2Tests.test_role_change_invalidates_session_and_records_old_new_scope) ... ok
+test_unique_house_per_unit_not_global_address (test_property_v2.PropertyV2Tests.test_unique_house_per_unit_not_global_address) ... ok
+
+----------------------------------------------------------------------
+Ran 133 tests in 74.248s
+
+OK
