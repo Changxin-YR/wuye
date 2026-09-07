@@ -6,7 +6,7 @@ from models import *
 from permissions import Policy
 from property_service import snapshot
 from agent_security import safe_record
-QUERIES={'house.search':'property.read','person.search':'person.read','person.properties':'person.read','order.search':'order.read','order.pending':'order.read','billing.unpaid':'billing.read','complaint.stats':'complaint.handle','whoami':'notice.read'}
+QUERIES={'house.search':'property.read','person.search':'person.read','person.properties':'person.read','order.search':'order.read','order.pending':'order.read','billing.unpaid':'billing.read','complaint.stats':'complaint.handle','notice.read':'notice.read','whoami':'notice.read'}
 def query(db,actor,command,args):
     if command not in QUERIES or not isinstance(args,dict):abort(400,description='无效查询')
     args=dict(args)
@@ -26,6 +26,12 @@ def query(db,actor,command,args):
     if any(not isinstance(v,(str,int)) or isinstance(v,bool) for v in args.values()):abort(400)
     p=Policy(db,actor);p.require(QUERIES[command])
     if command=='whoami':return p.identity()
+    if command=='notice.read':
+        q=p.query(Notice).order_by(Notice.id.desc())
+        for key in ('community_id','building_id'):
+            if args.get(key):q=q.where(getattr(Notice,key)==args[key])
+        rows=list(db.scalars(q.limit(101)))
+        return {'items':[safe_record(snapshot(x)) for x in rows[:100]],'truncated':len(rows)>100,'message':'仅返回当前账号授权范围内的最小必要数据'}
     if command.startswith('house.') or command in {'person.properties','billing.unpaid'}:
         hq=p.query(House)
         if args.get('id'):hq=hq.where(House.id==args['id'])

@@ -234,6 +234,8 @@ def error_code_for(status: int, message: str = "") -> str:
         return "BUSINESS_CONFLICT"
     if status == 410:
         return "CONFIRMATION_EXPIRED"
+    if status == 400 and "缺少必要参数" in message:
+        return "MISSING_PARAMETER"
     if status == 429:
         return "RATE_LIMITED"
     if status == 400:

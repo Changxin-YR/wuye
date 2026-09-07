@@ -5,12 +5,45 @@ import json
 import os
 import time
 import uuid
+from copy import deepcopy
+from contextvars import ContextVar
 from urllib.parse import urlsplit
 import requests
 
 class DifyUnavailable(RuntimeError):
     def __init__(self,message,code='unavailable'):
         super().__init__(message);self.code=code
+
+_TOOL_COMMANDS = ContextVar('bailian_tool_commands', default=None)
+_PLANNER_HINT = ContextVar('bailian_planner_hint', default=None)
+
+
+def _planner_calls(message, calls, force_final, allow_fallback=True):
+    """Keep the provider inside the deterministic planner's candidate set."""
+    if force_final:
+        return calls
+    hint = _PLANNER_HINT.get() or {}
+    candidates = {item for item in hint.get('candidates', ()) if isinstance(item, str)}
+    fallback = hint.get('tool_call')
+    if not allow_fallback or not isinstance(fallback, dict):
+        return calls
+    valid = []
+    for call in calls or ():
+        try:
+            fn = call.get('function') or {}
+            args = json.loads(fn.get('arguments', '{}'))
+            command = args.get('command') if isinstance(args, dict) else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            command = None
+        if not candidates or command in candidates:
+            valid.append(call)
+    if valid:
+        return valid
+    return [{
+        'id': 'planner-fallback',
+        'type': 'function',
+        'function': {'name': 'property_agent_tool', 'arguments': json.dumps(fallback, ensure_ascii=False)},
+    }]
 
 
 class BailianClient:
@@ -20,6 +53,24 @@ class BailianClient:
         self.api_key=(api_key or '').strip()
         self.model=(model or 'qwen-plus').strip()
         self.timeout=max(1,min(int(timeout),120))
+        self._histories={}
+
+    def _conversation_messages(self, query, user, conversation_id, system_prompt):
+        key=(user, conversation_id) if conversation_id else None
+        messages=deepcopy(self._histories.get(key, [])) if key else []
+        if messages:
+            if isinstance(system_prompt,str) and system_prompt.strip():
+                if messages[0].get('role')=='system':messages[0]={'role':'system','content':system_prompt}
+                else:messages.insert(0,{'role':'system','content':system_prompt})
+        else:
+            messages=([{'role':'system','content':system_prompt}] if isinstance(system_prompt,str) and system_prompt.strip() else [])+[{'role':'user','content':query}]
+            return messages
+        messages.append({'role':'user','content':query})
+        return messages
+
+    def _save_conversation(self, user, conversation_id, messages):
+        if conversation_id:
+            self._histories[(user,conversation_id)]=deepcopy(messages[-24:])
 
     @property
     def configured(self):
@@ -95,16 +146,27 @@ class BailianClient:
         except (ValueError,UnicodeError) as exc:raise DifyUnavailable('百炼返回了无法解析的内容。','bad_response') from exc
 
     def chat_stream(self,query,user,conversation_id='',tool_callback=None,system_prompt=''):
-        messages=([{'role':'system','content':system_prompt}] if isinstance(system_prompt,str) and system_prompt.strip() else [])+[{'role':'user','content':query}]
+        messages=self._conversation_messages(query,user,conversation_id,system_prompt)
         seen_tool_calls=set()
-        tools=[{'type':'function','function':{'name':'property_agent_tool','description':'查询授权物业数据或办理业务。command 必须使用 context 返回的 queries 或 commands，禁止猜测隐藏命令；高风险操作只生成待确认卡片。','parameters':{'type':'object','properties':{'request_token':{'type':'string'},'operation':{'type':'string','enum':['context','lookup','execute','propose']},'command':{'type':'string','description':'仅使用 context.queries 或 context.commands 中的命令'},'arguments_json':{'type':'string','description':'JSON 对象；先 lookup 获取真实 id/version，再执行或 propose'}},'required':['operation']}}}]
+        completed_commands=set()
+        previous_progress=None
+        no_progress=0
+        force_final=False
+        planner_fallback_used=False
+        command_schema={'type':'string','description':'仅使用授权目录中的命令'}
+        planner_candidates = (_PLANNER_HINT.get() or {}).get('candidates')
+        if planner_candidates:command_schema['enum']=sorted(set(planner_candidates))
+        elif _TOOL_COMMANDS.get():command_schema['enum']=sorted(_TOOL_COMMANDS.get())
+        tools=[{'type':'function','function':{'name':'property_agent_tool','description':'查询授权物业数据或办理业务。command 必须使用 context 返回的 queries 或 commands，禁止猜测隐藏命令；高风险操作只生成待确认卡片。','parameters':{'type':'object','properties':{'request_token':{'type':'string'},'operation':{'type':'string','enum':['context','lookup','execute','propose']},'command':command_schema,'arguments_json':{'type':'string','description':'JSON 对象；先 lookup 获取真实 id/version，再执行或 propose'}},'required':['operation']}}}]
         for _ in range(6):
             payload={'model':self.model,'messages':messages,'stream':True}
-            if tool_callback:payload['tools']=tools;payload['tool_choice']='auto'
+            if tool_callback and not force_final:payload['tools']=tools;payload['tool_choice']='required'
             completion=yield from self._stream_completion(payload)
             message=completion.get('message') or {}
             if not isinstance(message,dict):raise DifyUnavailable('百炼返回了无法识别的回答。','bad_response')
-            calls=message.get('tool_calls') or []
+            provider_calls=message.get('tool_calls') or []
+            calls=_planner_calls(message, provider_calls, force_final, not planner_fallback_used)
+            if not provider_calls and calls:planner_fallback_used=True
             if calls and tool_callback:
                 if not isinstance(calls,list) or len(calls)>4:raise DifyUnavailable('百炼返回的工具调用过多。','bad_response')
                 messages.append(message)
@@ -112,32 +174,67 @@ class BailianClient:
                     try:
                         fn=call['function'];args=json.loads(fn['arguments'])
                         if fn.get('name')!='property_agent_tool' or not isinstance(args,dict):raise ValueError()
-                        signature=json.dumps([fn.get('name'),fn.get('arguments')],ensure_ascii=False,sort_keys=True)
-                        if signature in seen_tool_calls:raise DifyUnavailable('百炼重复调用相同工具，请重试。','tool_loop')
-                        seen_tool_calls.add(signature)
-                        result=tool_callback(args)
+                        if ((_PLANNER_HINT.get() or {}).get('action') == 'CONFIRM' and args.get('operation') == 'execute'):
+                            args['operation'] = 'propose'
+                        canonical=json.dumps(args,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+                        signature=json.dumps([fn.get('name'),canonical],ensure_ascii=False)
+                        command=args.get('command')
+                        if force_final:
+                            result={'ok':False,'code':'NO_PROGRESS','message':'工具结果已无进展，请直接结束本轮。','terminal':False}
+                        elif signature in seen_tool_calls or command in completed_commands:
+                            result={'ok':True,'code':'ALREADY_EXECUTED','message':'本轮已处理该业务命令，请直接给出结果。','terminal':True}
+                            force_final=True
+                        else:
+                            seen_tool_calls.add(signature)
+                            result=tool_callback(args)
+                            progress=json.dumps(result,ensure_ascii=False,sort_keys=True,default=str)
+                            if progress==previous_progress:
+                                no_progress+=1
+                            else:
+                                previous_progress=progress;no_progress=0
+                            if no_progress>=1:
+                                result={'ok':False,'code':'NO_PROGRESS','message':'连续工具结果没有进展，请澄清后再试。','terminal':False}
+                                force_final=True
+                            if isinstance(result,dict) and result.get('terminal') and args.get('operation') in {'execute','propose'}:
+                                completed_commands.add(command);force_final=True
+                            if isinstance(result,dict) and (result.get('error') or result.get('code') in {'MISSING_PARAMETER','AMBIGUOUS_ENTITY','PERMISSION_DENIED','DATA_SCOPE_DENIED','RESOURCE_NOT_FOUND','BUSINESS_CONFLICT','CONFIRMATION_REQUIRED','VALIDATION_ERROR','SYSTEM_ERROR'}):
+                                force_final=True
                     except (KeyError,TypeError,ValueError,UnicodeError):result={'error':'工具调用参数无效'}
                     messages.append({'role':'tool','tool_call_id':str(call.get('id','')),'content':json.dumps(result,ensure_ascii=False,default=str)})
                 continue
             answer=message.get('content')
             if not isinstance(answer,str) or not answer.strip():raise DifyUnavailable('百炼未返回有效文本。','bad_response')
-            yield {'type':'done','answer':answer,'conversation_id':conversation_id or completion.get('id') or str(uuid.uuid4())}
+            cid=conversation_id or completion.get('id') or str(uuid.uuid4())
+            messages.append({'role':'assistant','content':answer})
+            self._save_conversation(user,cid,messages)
+            yield {'type':'done','answer':answer,'conversation_id':cid}
             return
         raise DifyUnavailable('百炼工具调用次数超出限制，请重试。','bad_response')
 
     def chat(self,query,user,conversation_id='',tool_callback=None,system_prompt=''):
-        messages=([{'role':'system','content':system_prompt}] if isinstance(system_prompt,str) and system_prompt.strip() else [])+[{'role':'user','content':query}]
+        messages=self._conversation_messages(query,user,conversation_id,system_prompt)
         seen_tool_calls=set()
-        tools=[{'type':'function','function':{'name':'property_agent_tool','description':'查询授权物业数据或办理业务。command 必须使用 context 返回的 queries 或 commands，禁止猜测隐藏命令；高风险操作只生成待确认卡片。','parameters':{'type':'object','properties':{'request_token':{'type':'string'},'operation':{'type':'string','enum':['context','lookup','execute','propose']},'command':{'type':'string','description':'仅使用 context.queries 或 context.commands 中的命令'},'arguments_json':{'type':'string','description':'JSON 对象；先 lookup 获取真实 id/version，再执行或 propose'}},'required':['operation']}}}]
+        completed_commands=set()
+        previous_progress=None
+        no_progress=0
+        force_final=False
+        planner_fallback_used=False
+        command_schema={'type':'string','description':'仅使用授权目录中的命令'}
+        planner_candidates = (_PLANNER_HINT.get() or {}).get('candidates')
+        if planner_candidates:command_schema['enum']=sorted(set(planner_candidates))
+        elif _TOOL_COMMANDS.get():command_schema['enum']=sorted(_TOOL_COMMANDS.get())
+        tools=[{'type':'function','function':{'name':'property_agent_tool','description':'查询授权物业数据或办理业务。command 必须使用 context 返回的 queries 或 commands，禁止猜测隐藏命令；高风险操作只生成待确认卡片。','parameters':{'type':'object','properties':{'request_token':{'type':'string'},'operation':{'type':'string','enum':['context','lookup','execute','propose']},'command':command_schema,'arguments_json':{'type':'string','description':'JSON 对象；先 lookup 获取真实 id/version，再执行或 propose'}},'required':['operation']}}}]
         for _ in range(6):
             payload={'model':self.model,'messages':messages,'stream':False}
-            if tool_callback:payload['tools']=tools;payload['tool_choice']='auto'
+            if tool_callback and not force_final:payload['tools']=tools;payload['tool_choice']='required'
             obj=self._request('POST','/chat/completions',payload)
             choices=obj.get('choices')
             if not isinstance(choices,list) or not choices or not isinstance(choices[0],dict):raise DifyUnavailable('百炼返回了无法识别的回答。','bad_response')
             message=choices[0].get('message') or {}
             if not isinstance(message,dict):raise DifyUnavailable('百炼返回了无法识别的回答。','bad_response')
-            calls=message.get('tool_calls') or []
+            provider_calls=message.get('tool_calls') or []
+            calls=_planner_calls(message, provider_calls, force_final, not planner_fallback_used)
+            if not provider_calls and calls:planner_fallback_used=True
             if calls and tool_callback:
                 if not isinstance(calls,list) or len(calls)>4:raise DifyUnavailable('百炼返回的工具调用过多。','bad_response')
                 messages.append(message)
@@ -145,16 +242,40 @@ class BailianClient:
                     try:
                         fn=call['function'];args=json.loads(fn['arguments'])
                         if fn.get('name')!='property_agent_tool' or not isinstance(args,dict):raise ValueError()
-                        signature=json.dumps([fn.get('name'),fn.get('arguments')],ensure_ascii=False,sort_keys=True)
-                        if signature in seen_tool_calls:raise DifyUnavailable('百炼重复调用相同工具，请重试。','tool_loop')
-                        seen_tool_calls.add(signature)
-                        result=tool_callback(args)
+                        if ((_PLANNER_HINT.get() or {}).get('action') == 'CONFIRM' and args.get('operation') == 'execute'):
+                            args['operation'] = 'propose'
+                        canonical=json.dumps(args,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+                        signature=json.dumps([fn.get('name'),canonical],ensure_ascii=False)
+                        command=args.get('command')
+                        if force_final:
+                            result={'ok':False,'code':'NO_PROGRESS','message':'工具结果已无进展，请直接结束本轮。','terminal':False}
+                        elif signature in seen_tool_calls or command in completed_commands:
+                            result={'ok':True,'code':'ALREADY_EXECUTED','message':'本轮已处理该业务命令，请直接给出结果。','terminal':True}
+                            force_final=True
+                        else:
+                            seen_tool_calls.add(signature)
+                            result=tool_callback(args)
+                            progress=json.dumps(result,ensure_ascii=False,sort_keys=True,default=str)
+                            if progress==previous_progress:
+                                no_progress+=1
+                            else:
+                                previous_progress=progress;no_progress=0
+                            if no_progress>=1:
+                                result={'ok':False,'code':'NO_PROGRESS','message':'连续工具结果没有进展，请澄清后再试。','terminal':False}
+                                force_final=True
+                            if isinstance(result,dict) and result.get('terminal') and args.get('operation') in {'execute','propose'}:
+                                completed_commands.add(command);force_final=True
+                            if isinstance(result,dict) and (result.get('error') or result.get('code') in {'MISSING_PARAMETER','AMBIGUOUS_ENTITY','PERMISSION_DENIED','DATA_SCOPE_DENIED','RESOURCE_NOT_FOUND','BUSINESS_CONFLICT','CONFIRMATION_REQUIRED','VALIDATION_ERROR','SYSTEM_ERROR'}):
+                                force_final=True
                     except (KeyError,TypeError,ValueError,UnicodeError):result={'error':'工具调用参数无效'}
                     messages.append({'role':'tool','tool_call_id':str(call.get('id','')),'content':json.dumps(result,ensure_ascii=False,default=str)})
                 continue
             answer=message.get('content')
             if not isinstance(answer,str) or not answer.strip():raise DifyUnavailable('百炼未返回有效文本。','bad_response')
-            return {'answer':answer,'conversation_id':conversation_id or obj.get('id') or str(uuid.uuid4())}
+            cid=conversation_id or obj.get('id') or str(uuid.uuid4())
+            messages.append({'role':'assistant','content':answer})
+            self._save_conversation(user,cid,messages)
+            return {'answer':answer,'conversation_id':cid}
         raise DifyUnavailable('百炼工具调用次数超出限制，请重试。','bad_response')
 
     def check(self,infer=False):

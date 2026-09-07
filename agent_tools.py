@@ -61,6 +61,44 @@ LABELS = {
 }
 HIGH_IMPACT = {'house.unbind', 'house.delete', 'notice.delete', 'user.disable', 'user.enable'}
 AGENT_EXCLUDED = {'staff.create', 'role.save', 'relation.bind'}
+CAPABILITY_CATALOG = {
+    'relation.bind_by_name': {
+        'when_to_use': '将唯一明确的人员绑定到唯一明确的房屋',
+        'when_not_to_use': '房屋或人员缺少关键字段、人员重名或关系已存在时不要调用',
+        'required_parameters': ['building_name', 'room_no', 'person_name'],
+        'entity_requirements': ['house:RESOLVED', 'person:RESOLVED'],
+        'ambiguity_policy': '多个结果必须返回 AMBIGUOUS_ENTITY 并要求消歧',
+        'examples': ['把23栋311绑定王五'],
+        'negative_examples': ['给23栋绑定业主'],
+    },
+    'order.create': {
+        'when_to_use': '用户明确要求新建报修或维修工单',
+        'when_not_to_use': '用户只查询、重复提交或未明确房屋时不要猜测创建',
+        'required_parameters': ['title', 'content', 'type'],
+        'entity_requirements': ['house:RESOLVED for private repair'],
+        'ambiguity_policy': '房屋不唯一时要求补充楼栋、单元和房号',
+        'examples': ['登记厨房漏水报修'],
+        'negative_examples': ['再提交一次刚才的报修'],
+    },
+    'order.assign': {
+        'when_to_use': '给明确工单分配明确维修人员',
+        'when_not_to_use': '缺少工单 id/version 或维修人未解析时不要调用',
+        'required_parameters': ['id', 'version', 'repairer_id'],
+        'entity_requirements': ['order:RESOLVED', 'repairer:RESOLVED'],
+        'ambiguity_policy': '查询结果多于一个时要求消歧',
+        'examples': ['把指定工单派给张三'],
+        'negative_examples': ['把工单派给某个人'],
+    },
+    'inspection.complete': {
+        'when_to_use': '提交当前登录人员负责的巡检结果',
+        'when_not_to_use': '只有设备编号但没有巡检记录 id/version 时不要猜测',
+        'required_parameters': ['id', 'version', 'findings'],
+        'entity_requirements': ['inspection:RESOLVED'],
+        'ambiguity_policy': '设备对应多条巡检时必须要求选择',
+        'examples': ['提交 P-01 巡检结果'],
+        'negative_examples': ['把设备直接标记为完成巡检'],
+    },
+}
 LEGACY_PERMISSION = {
     'house.add': 'property.write', 'house.bind': 'relation.write', 'house.unbind': 'relation.end',
     'house.delete': 'property.write', 'notice.add': 'notice.write', 'notice.edit': 'notice.write',
@@ -83,7 +121,7 @@ def available_commands(actor):
         if command in AGENT_EXCLUDED or not p.has(values[0]):
             continue
         permission, high_impact, parameters, risk, mode = _domain_meta(command)
-        result.append({
+        item = {
             'command': command,
             'name': ACTION_NAMES.get(command, command),
             'permission': permission,
@@ -91,7 +129,17 @@ def available_commands(actor):
             'risk_level': risk,
             'execution_mode': mode,
             'requires_confirmation': mode == 'CONFIRM',
-        })
+        }
+        item.update(CAPABILITY_CATALOG.get(command, {
+            'when_to_use': ACTION_NAMES.get(command, command),
+            'when_not_to_use': '缺少必要参数或实体不明确时不要调用',
+            'required_parameters': [x for x in parameters.split() if x in {'id', 'version'}],
+            'entity_requirements': [],
+            'ambiguity_policy': '多个结果必须要求用户消歧',
+            'examples': [],
+            'negative_examples': [],
+        }))
+        result.append(item)
     return result
 
 
@@ -136,6 +184,12 @@ def normalize(actor, command, params):
         abort(400, description='操作包含未允许的参数')
     if any(not isinstance(v, (str, int, bool, list)) for v in params.values()):
         abort(400, description='操作参数类型错误')
+    required = {
+        'relation.bind_by_name': ('room_no', 'person_name'),
+    }.get(command, ())
+    missing = [key for key in required if key not in params or params[key] in (None, '')]
+    if missing:
+        abort(400, description='缺少必要参数：' + '、'.join(missing))
     if len(json.dumps(params, ensure_ascii=False)) > 10000:
         abort(400, description='操作参数过长')
     return params
@@ -332,6 +386,30 @@ def action_view(item, model_safe=False):
         'expires_at': item.expires_at.isoformat() + 'Z',
         'result': result,
     }
+
+
+def structured_result(value, operation='lookup'):
+    """Return a stable, model-facing tool envelope without changing business data."""
+    if isinstance(value, dict) and value.get('ok') is False:
+        return {**value, 'ok': False, 'code': value.get('code') or 'SYSTEM_ERROR', 'terminal': False}
+    status = value.get('status') if isinstance(value, dict) else None
+    if operation == 'propose' or status == 'pending':
+        code, ok, terminal = 'CONFIRMATION_REQUIRED', True, False
+    elif operation == 'execute':
+        code, ok, terminal = 'SUCCESS', True, True
+    elif operation == 'lookup':
+        code, ok, terminal = 'SUCCESS', True, False
+    else:
+        code, ok, terminal = 'SUCCESS', True, False
+    envelope = dict(value) if isinstance(value, dict) else {'value': value}
+    envelope.update({
+        'ok': ok,
+        'code': code,
+        'message': (value.get('message') if isinstance(value, dict) else None) or code,
+        'data': value,
+        'terminal': terminal,
+    })
+    return envelope
 
 
 def confirm(db, actor, action_id):

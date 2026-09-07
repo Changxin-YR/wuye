@@ -22,7 +22,8 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from agent_tools import action_view, available_commands, confirm, grant_actor, propose
+from agent_tools import action_view, available_commands, confirm, grant_actor, propose, structured_result
+from agent_planner import plan_request
 from agent_security import error_code_for, issue_agent_token, redact_provider_text, safe_record
 from business import BusinessService
 from database import make_engine, missing_schema
@@ -32,8 +33,8 @@ from management import bp as management_bp
 from property_service import audit as domain_audit,snapshot as domain_snapshot
 from business_queries import query as domain_query
 from permissions import Policy
-from dify_client import BailianClient, DifyClient, DifyUnavailable
-from models import AiAction, AiGrant, AiConversation, AuditLog, Base, Evaluation, House, Notice, Notification, OrderLog, User, WorkOrder, utcnow
+from dify_client import BailianClient, DifyClient, DifyUnavailable, _PLANNER_HINT, _TOOL_COMMANDS
+from models import AiAction, AiGrant, AiConversation, AuditLog, Base, Evaluation, House, Notice, Notification, OrderLog, Person, User, WorkOrder, utcnow
 from services import InvalidTransition, ORDER_TYPES, ROLE_TEXT, STATUS_TEXT, can_access_order, log_order, notify, notify_admins, scope_orders, transition_status
 
 PROJECT_ROOT=Path(__file__).resolve().parent
@@ -72,7 +73,7 @@ def create_app(test_config=None):
     factory=sessionmaker(bind=engine,expire_on_commit=False,class_=Session)
     legacy_dify = bool(test_config and ('DIFY_BASE_URL' in test_config or 'DIFY_API_KEY' in test_config) and 'AI_PROVIDER' not in test_config)
     ai_client = DifyClient(app.config['DIFY_BASE_URL'],app.config['DIFY_API_KEY'],app.config['DIFY_TIMEOUT']) if app.config['AI_PROVIDER']=='dify' or legacy_dify else BailianClient(app.config['BAILIAN_BASE_URL'],app.config['BAILIAN_API_KEY'],app.config['BAILIAN_MODEL'],app.config['DIFY_TIMEOUT'])
-    app.extensions.update(db_engine=engine,db_session=factory,dify=ai_client,ai=ai_client)
+    app.extensions.update(db_engine=engine,db_session=factory,dify=ai_client,ai=ai_client,agent_contexts={})
     folder=Path(app.config['UPLOAD_FOLDER'])
     if not folder.is_absolute():folder=PROJECT_ROOT/folder
     folder.mkdir(parents=True,exist_ok=True);app.config['UPLOAD_FOLDER']=str(folder)
@@ -462,6 +463,39 @@ def create_app(test_config=None):
             conversation=g.db.get(AiConversation,cid)
             if not conversation or conversation.user_id!=g.user.id:abort(403)
         context,digest=ai_context()
+        authorized={item['command'] for item in context.get('commands', []) if isinstance(item,dict)} | set(context.get('queries', []))
+        planner_context=dict(app.extensions['agent_contexts'].get((g.user.id,cid),{})) if cid else {}
+        if 'resolved_order' not in planner_context:
+            accessible_orders=list(g.db.scalars(Policy(g.db,g.user).query(WorkOrder).limit(2)))
+            if len(accessible_orders)==1:
+                planner_context['resolved_order']={'id':accessible_orders[0].id,'order_no':accessible_orders[0].order_no}
+        if Policy(g.db,g.user).resident and 'resolved_house' not in planner_context:
+            own_houses=list(g.db.scalars(Policy(g.db,g.user).query(House).limit(2)))
+            if len(own_houses)==1:
+                planner_context['resolved_house']={'id':own_houses[0].id,'building_name':own_houses[0].building_name,'room_no':own_houses[0].room_no}
+                planner_context['resident_current_house']=True
+        planner_hint=plan_request(message, authorized, planner_context)
+        person_name=(planner_hint.get('arguments') or {}).get('person_name')
+        if person_name:
+            person_candidates=len(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==person_name).limit(4)).all())
+            planner_context['person_candidates']=person_candidates
+            planner_hint=plan_request(message, authorized, planner_context)
+        if planner_hint.get('intent')=='parking.assign':
+            from models import ParkingSpace, Vehicle
+            values=planner_hint.get('arguments') or {}
+            policy=Policy(g.db,g.user)
+            vehicle_candidates=len(g.db.scalars(policy.query(Vehicle).where(Vehicle.plate==values.get('plate')).limit(3)).all()) if values.get('plate') else 0
+            parking_candidates=len(g.db.scalars(policy.query(ParkingSpace).where(ParkingSpace.code==values.get('space_code')).limit(3)).all()) if values.get('space_code') else 0
+            planner_context['vehicle_candidates']=vehicle_candidates
+            planner_context['parking_candidates']=parking_candidates
+            planner_hint=plan_request(message, authorized, planner_context)
+        if planner_hint.get('action') in {'CLARIFY','DISAMBIGUATE','DENY'} and planner_hint.get('entity_status') != 'REPEAT':
+            local_conversation=conversation
+            if not local_conversation:
+                local_conversation=AiConversation(id=str(uuid.uuid4()),user_id=g.user.id,scope_hash=digest)
+                g.db.add(local_conversation);g.db.flush()
+            answers={'CLARIFY':'请补充必要的业务信息后再操作。','DISAMBIGUATE':'找到多个匹配对象，请提供更多信息以确认。','DENY':'该请求不在当前登录身份允许的范围内。'}
+            return jsonify(answer=answers[planner_hint['action']],conversation_id=local_conversation.id,source='planner',scope=context['scope'],actions=[])
         upstream=conversation.upstream_id if conversation and conversation.scope_hash==digest else ''
         if g.db.scalar(select(func.count(AiGrant.id)).where(AiGrant.user_id==g.user.id,AiGrant.created_at>utcnow()-timedelta(minutes=1)))>=10:
             return jsonify(error='请求过于频繁，请稍后再试'),429
@@ -476,6 +510,7 @@ def create_app(test_config=None):
             # secret never needs to be placed in model-visible text.
             prompt=message.strip()
             system_instruction=(AGENT_SYSTEM_PROMPT+'\n当前授权摘要（仅供规划，最终权限以后端实时校验为准）：'+json.dumps(context,ensure_ascii=False)+
+                                '\n确定性规划提示（只用于缩小候选，不代表授权）：'+json.dumps(planner_hint,ensure_ascii=False)+
                                 '\n本地工具调用无需提供request_token；服务端自动绑定本轮登录身份。')
         else:
             # Dify invokes the exported OpenAPI endpoint itself, so it receives a
@@ -483,25 +518,155 @@ def create_app(test_config=None):
             prompt=(AGENT_SYSTEM_PROMPT+'\n本次request_token：'+token+'\n授权数据：'+json.dumps(context,ensure_ascii=False)+'\n用户请求：'+message.strip())
             system_instruction=''
         mutation_commands=set()
+        def planner_tool_call():
+            """Build one conservative callback request for a clear planner result."""
+            command=planner_hint.get('intent')
+            values=dict(planner_hint.get('arguments') or {})
+            repeat_create=planner_hint.get('entity_status')=='REPEAT' and command=='order.create'
+            if (planner_hint.get('action') not in {'TOOL','CONFIRM'} and not repeat_create) or not command:
+                return None
+            if repeat_create:
+                return {'operation':'execute','command':'order.create','arguments_json':'{}'}
+            from models import Bill, Building, Complaint, FeeItem, Inspection, ParkingSpace, Person as DomainPerson, Vehicle
+            policy=Policy(g.db,g.user)
+            def one_person(name=None, phone=None):
+                if not name and not phone:return None
+                q=policy.query(DomainPerson)
+                if name:q=q.where(DomainPerson.name==name)
+                if phone:q=q.where(DomainPerson.phone==phone)
+                rows=list(g.db.scalars(q.limit(2)))
+                return rows[0] if len(rows)==1 else None
+            def one_house():
+                q=policy.query(House)
+                if values.get('building_name'):q=q.where(House.building_name==values['building_name'])
+                if values.get('unit'):q=q.where(House.unit==values['unit'])
+                if values.get('room_no') is not None:q=q.where(House.room_no==values['room_no'])
+                rows=list(g.db.scalars(q.limit(2)))
+                return rows[0] if len(rows)==1 else None
+            def one_order():
+                q=policy.query(WorkOrder)
+                if values.get('order_no'):q=q.where(WorkOrder.order_no==values['order_no'])
+                elif planner_context.get('resolved_order',{}).get('id'):q=q.where(WorkOrder.id==planner_context['resolved_order']['id'])
+                else:q=q.order_by(WorkOrder.updated_at.desc())
+                rows=list(g.db.scalars(q.limit(2)))
+                return rows[0] if len(rows)==1 else None
+            params={}
+            operation='lookup' if command in {'house.search','person.search','order.search','billing.unpaid','complaint.stats','whoami','notice.read'} else ('propose' if planner_hint.get('action')=='CONFIRM' else 'execute')
+            if command=='house.search':
+                params={k:values[k] for k in ('building_name','unit','room_no') if k in values}
+            elif command=='person.search':
+                params={k:values[k] for k in ('person_name','phone') if k in values}
+            elif command=='order.search':
+                if values.get('order_no'):params={'order_no':values['order_no']}
+                elif planner_context.get('resolved_order',{}).get('id'):params={'id':planner_context['resolved_order']['id']}
+            elif command in {'notice.read','whoami','complaint.stats'}:
+                params={}
+            elif command=='billing.unpaid':
+                params={k:values[k] for k in ('building_name','unit','room_no','month') if k in values}
+                if values.get('person_name') or values.get('phone'):
+                    person=one_person(values.get('person_name'),values.get('phone'))
+                    if not person:return None
+                    params['person_id']=person.id
+            elif command=='person.save':
+                person=planner_context.get('resolved_person') or {}
+                if not person.get('id'):
+                    found=one_person(values.get('person_name'),values.get('phone'))
+                    if not found:return None
+                    person={'id':found.id,'name':found.name}
+                current=g.db.get(DomainPerson,int(person['id']))
+                if not current:return None
+                params={'id':current.id,'version':current.version,'community_id':current.community_id,'name':current.name,'phone':values['phone']}
+            elif command=='order.create':
+                house=one_house()
+                if not house:return None
+                content=message.split('，',1)[-1].strip() or message.strip()
+                params={'house_id':house.id,'community_id':house.community_id,'building_id':house.building_id,'title':content[:100],'content':content,'type':'其他'}
+            elif command=='vehicle.save':
+                person=one_person(values.get('person_name'),values.get('phone'))
+                house=one_house()
+                if not person or not house or not values.get('plate'):return None
+                params={'house_id':house.id,'person_id':person.id,'plate':values['plate'],'model':''}
+            elif command=='device.save':
+                building_name=values.get('building_name')
+                code=values.get('space_code')
+                building=g.db.scalar(policy.query(Building).where(Building.name==building_name)) if building_name else None
+                if not building or not code:return None
+                name='水泵' if '水泵' in message else message.split('，',1)[0][:100]
+                params={'community_id':building.community_id,'building_id':building.id,'code':code,'name':name,'category':'equipment','location':'','status':'normal'}
+            elif command=='parking.assign':
+                space_code=values.get('space_code');plate=values.get('plate')
+                if not space_code or not plate:return None
+                space=g.db.scalar(policy.query(ParkingSpace).where(ParkingSpace.code==space_code))
+                vehicle=g.db.scalar(policy.query(Vehicle).where(Vehicle.plate==plate))
+                if not space or not vehicle:return None
+                params={'space_id':space.id,'vehicle_id':vehicle.id}
+            elif command in {'order.assign','order.accept','order.progress','order.finish','order.reopen','order.close'}:
+                order=one_order()
+                if not order:return None
+                params={'id':order.id,'version':order.version}
+                if command=='order.assign':
+                    person=one_person(values.get('repairer_name'))
+                    repairer_id=person.user_id if person else None
+                    if not repairer_id:return None
+                    params['repairer_id']=repairer_id
+                elif command in {'order.progress','order.finish','order.reopen','order.close'}:
+                    params['remark']=message.strip()
+            elif command=='complaint.resolve':
+                complaint=g.db.scalar(policy.query(Complaint).order_by(Complaint.updated_at.desc()))
+                if not complaint:return None
+                params={'id':complaint.id,'version':complaint.version,'resolution':message.split('，',1)[-1].strip()}
+            elif command=='bill.batch':
+                building=one_house()
+                if not building:return None
+                fee=g.db.scalar(policy.query(FeeItem).limit(1))
+                if not fee:return None
+                month=(utcnow()+timedelta(hours=8)).strftime('%Y-%m')
+                params={'building_id':building.building_id,'fee_item_id':fee.id,'period':month,'due_date':(utcnow()+timedelta(days=30)).date().isoformat()}
+            elif command=='payment.record':
+                bill_id=values.get('bill_id') or values.get('id')
+                if not bill_id or 'amount' not in values:return None
+                bill=g.db.get(Bill,int(bill_id))
+                if not bill:return None
+                params={'bill_id':bill.id,'version':bill.version,'amount':values['amount'],'channel':'cash','reference':''}
+            elif command=='payment.reverse':
+                payment_id=values.get('id')
+                if not payment_id:return None
+                from models import Payment
+                payment=g.db.get(Payment,int(payment_id))
+                if not payment:return None
+                params={'id':payment.id,'version':payment.version,'reason':message.strip()}
+            else:
+                return None
+            return {'operation':operation,'command':command,'arguments_json':json.dumps(params,ensure_ascii=False)}
+        planner_hint['tool_call']=planner_tool_call()
         def bailian_tool(args):
             try:
                 grant,actor=grant_actor(g.db,token if is_bailian else args.get('request_token'))
                 operation=args.get('operation')
-                if operation=='context':return ai_context()[0]
+                if operation=='context':return {'ok':True,'code':'SUCCESS','data':ai_context()[0],'terminal':True}
+                if planner_hint.get('action') in {'CLARIFY','DISAMBIGUATE','DENY'} and planner_hint.get('entity_status') != 'REPEAT' and operation in {'execute','propose'} and planner_hint.get('intent') != 'relation.bind_by_name':
+                    code={'CLARIFY':'MISSING_PARAMETER','DISAMBIGUATE':'AMBIGUOUS_ENTITY','DENY':'PERMISSION_DENIED'}[planner_hint['action']]
+                    return {'ok':False,'code':code,'message':'请先完成必要的澄清、身份确认或权限校验。','terminal':False}
                 raw=args.get('arguments_json','{}')
                 if not isinstance(raw,str) or len(raw)>10000:return {'error':'arguments_json无效'}
                 params=json.loads(raw)
-                if operation=='lookup':return domain_query(g.db,actor,args.get('command'),params)
+                if operation=='lookup':return structured_result(domain_query(g.db,actor,args.get('command'),params),'lookup')
                 if operation not in {'execute','propose'}:return {'error':'工具操作类型无效'}
                 command=args.get('command')
                 if command in mutation_commands:return {'error':'本轮已处理该业务命令，请先查看结果再继续'}
+                if planner_hint.get('entity_status') == 'REPEAT' and command == 'order.create':
+                    existing=g.db.scalar(Policy(g.db,g.user).query(WorkOrder).order_by(WorkOrder.updated_at.desc()))
+                    if existing:
+                        mutation_commands.add(command)
+                        return {'ok':True,'code':'ALREADY_EXECUTED','message':'已有报修记录，本轮未重复提交。','data':{'id':existing.id},'terminal':True}
                 from agent_tools import perform
                 item=perform(g.db,actor,grant,command,params) if operation=='execute' else propose(g.db,actor,grant,command,params)
                 result_view=action_view(item,model_safe=True)
                 if result_view.get('status') in {'executed','pending'}:mutation_commands.add(command)
-                g.db.commit();return result_view
+                g.db.commit();return structured_result(result_view,operation)
             except (HTTPException,ValueError,TypeError,KeyError) as exc:
-                g.db.rollback();return {'error':getattr(exc,'description',str(exc))[:300],'code':error_code_for(getattr(exc,'code',400) or 400,getattr(exc,'description',str(exc)))}
+                g.db.rollback();message=getattr(exc,'description',str(exc))[:300]
+                return {'ok':False,'error':message,'message':message,'code':error_code_for(getattr(exc,'code',400) or 400,message),'terminal':False}
         if payload.get('stream') is True:
             stream_db=factory()
             def stream_result():
@@ -514,10 +679,16 @@ def create_app(test_config=None):
                     yield 'data: '+json.dumps({'type':'error','error':'AI正在处理其他任务，请稍后再试'},ensure_ascii=False)+'\n\n';return
                 try:
                     if isinstance(app.extensions['dify'],BailianClient):
-                        for event in app.extensions['dify'].chat_stream(prompt,f'property:{uid}:v{auth}',upstream,bailian_tool,system_prompt=system_instruction):
-                            if event['type']=='delta':
-                                yield 'data: '+json.dumps({'type':'delta','content':redact_provider_text(event['content'],token)},ensure_ascii=False)+'\n\n'
-                            elif event['type']=='done':result=event
+                        command_token=_TOOL_COMMANDS.set(authorized)
+                        planner_token=_PLANNER_HINT.set(planner_hint)
+                        try:
+                            for event in app.extensions['dify'].chat_stream(prompt,f'property:{uid}:v{auth}',upstream,bailian_tool,system_prompt=system_instruction):
+                                if event['type']=='delta':
+                                    yield 'data: '+json.dumps({'type':'delta','content':redact_provider_text(event['content'],token)},ensure_ascii=False)+'\n\n'
+                                elif event['type']=='done':result=event
+                        finally:
+                            _PLANNER_HINT.reset(planner_token)
+                            _TOOL_COMMANDS.reset(command_token)
                     else:
                         result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream)
                         yield 'data: '+json.dumps({'type':'delta','content':redact_provider_text(result['answer'],token)},ensure_ascii=False)+'\n\n'
@@ -539,6 +710,19 @@ def create_app(test_config=None):
                     yield 'data: '+json.dumps({'type':'error','error':'百炼未返回有效文本','code':'bad_response'},ensure_ascii=False)+'\n\n';return
                 if not conversation:conversation=AiConversation(id=str(uuid.uuid4()),user_id=uid);g.db.add(conversation)
                 conversation.upstream_id=result['conversation_id'];conversation.scope_hash=digest;conversation.updated_at=utcnow()
+                remembered=dict(planner_context)
+                values=planner_hint.get('arguments') or {}
+                if values.get('person_name'):
+                    rows=list(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==values['person_name']).limit(2)))
+                    if len(rows)==1:remembered['resolved_person']={'id':rows[0].id,'name':rows[0].name}
+                if values.get('building_name') and values.get('room_no') is not None:
+                    q=Policy(g.db,g.user).query(House).where(House.building_name==values['building_name'],House.room_no==values['room_no'])
+                    rows=list(g.db.scalars(q.limit(2)))
+                    if len(rows)==1:remembered['resolved_house']={'id':rows[0].id,'building_name':rows[0].building_name,'room_no':rows[0].room_no}
+                if planner_hint.get('intent','').startswith('order.'):
+                    row=g.db.scalar(Policy(g.db,g.user).query(WorkOrder).order_by(WorkOrder.updated_at.desc()))
+                    if row:remembered['resolved_order']={'id':row.id,'order_no':row.order_no}
+                app.extensions['agent_contexts'][(uid,conversation.id)]=remembered
                 actions=[action_view(x) for x in g.db.scalars(select(AiAction).where(AiAction.grant_id==gid).order_by(AiAction.created_at))]
                 g.db.commit()
                 yield 'data: '+json.dumps({'type':'done','conversation_id':conversation.id,'source':'bailian' if isinstance(app.extensions['dify'],BailianClient) else 'dify','scope':context['scope'],'actions':actions},ensure_ascii=False)+'\n\n'
@@ -548,7 +732,13 @@ def create_app(test_config=None):
             grant=g.db.get(AiGrant,gid);grant.expires_at=utcnow();g.db.commit();return jsonify(error='AI正在处理其他任务，请稍后再试'),429
         try:
             try:
-                if isinstance(app.extensions['dify'],BailianClient):result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream,bailian_tool,system_prompt=system_instruction)
+                if isinstance(app.extensions['dify'],BailianClient):
+                    command_token=_TOOL_COMMANDS.set(authorized)
+                    planner_token=_PLANNER_HINT.set(planner_hint)
+                    try:result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream,bailian_tool,system_prompt=system_instruction)
+                    finally:
+                        _PLANNER_HINT.reset(planner_token)
+                        _TOOL_COMMANDS.reset(command_token)
                 else:result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream)
             except DifyUnavailable as exc:failure=exc
         finally:ai_slots.release()
@@ -564,6 +754,19 @@ def create_app(test_config=None):
         if failure:return jsonify(error=str(failure),code=failure.code),503
         if not conversation:conversation=AiConversation(id=str(uuid.uuid4()),user_id=uid);g.db.add(conversation)
         conversation.upstream_id=result['conversation_id'];conversation.scope_hash=digest;conversation.updated_at=utcnow()
+        remembered=dict(planner_context)
+        values=planner_hint.get('arguments') or {}
+        if values.get('person_name'):
+            rows=list(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==values['person_name']).limit(2)))
+            if len(rows)==1:remembered['resolved_person']={'id':rows[0].id,'name':rows[0].name}
+        if values.get('building_name') and values.get('room_no') is not None:
+            q=Policy(g.db,g.user).query(House).where(House.building_name==values['building_name'],House.room_no==values['room_no'])
+            rows=list(g.db.scalars(q.limit(2)))
+            if len(rows)==1:remembered['resolved_house']={'id':rows[0].id,'building_name':rows[0].building_name,'room_no':rows[0].room_no}
+        if planner_hint.get('intent','').startswith('order.'):
+            row=g.db.scalar(Policy(g.db,g.user).query(WorkOrder).order_by(WorkOrder.updated_at.desc()))
+            if row:remembered['resolved_order']={'id':row.id,'order_no':row.order_no}
+        app.extensions['agent_contexts'][(uid,conversation.id)]=remembered
         return jsonify(answer=redact_provider_text(result['answer'],token),conversation_id=conversation.id,source='bailian' if isinstance(app.extensions['dify'],BailianClient) else 'dify',scope=context['scope'],
                        actions=[action_view(x) for x in g.db.scalars(select(AiAction).where(AiAction.grant_id==gid).order_by(AiAction.created_at))])
 
