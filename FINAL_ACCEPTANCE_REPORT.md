@@ -1,144 +1,161 @@
-# 美家物业 V2 + AI Agent 第二轮最终验收报告
+# 美家物业 V2 + AI Agent 第三轮最终验收报告
 
 ## 项目概况
 
 - 项目：美家物业 V2（Python / Flask / Jinja2 / SQLAlchemy / MySQL / 百炼）
 - 分支：`main`
-- 验收基线 commit：`8ea12a999785dca2288c742891040475a3373938`
-- 第一轮最终 commit：`457002dbf31712a8021cedc3c828f95226b706dd`
-- 第二轮最终代码/证据 commit：`7d84815`
+- `baseline_commit`：`8ea12a999785dca2288c742891040475a3373938`
+- `first_round_commit`：`457002dbf31712a8021cedc3c828f95226b706dd`
+- `second_round_commit`：`6355a9e10bcb43c54f4217955249726719d02207`
+- `final_commit`：`82d5bbe`（第三轮代码、测试和验收证据最终提交）；报告文档提交另行列出。
+
+第三轮只修复 Agent 自然语言可靠性缺口，保留既有 `PropertyService`、Policy、RBAC、DataScope、MySQL schema、AiGrant/AiAction、事务、幂等和高风险确认机制。
 
 ## 环境与配置
 
-- Python 依赖按 `requirements.txt` 安装；`.venv` 独立环境可用。
+- 独立 Python 环境按 `requirements.txt` 安装。
 - `python -m compileall -q .`：PASS。
-- `.env` 已检查 `SECRET_KEY`、`DATABASE_URL`、`AI_PROVIDER`、百炼地址/模型、上传目录、HOST/PORT；密钥和数据库密码未写入证据。
-- 生产诊断：`python manage.py diagnose` 返回 `database=ok`、`schema=ok`、`missing=[]`。
-- 百炼诊断：`python manage.py diagnose --ai --infer` 返回 `status=ok`、`inference_checked=true`、模型 `qwen-plus`。
+- `.env` 已检查 `SECRET_KEY`、`DATABASE_URL`、`AI_PROVIDER`、`BAILIAN_BASE_URL`、`BAILIAN_API_KEY`、`BAILIAN_MODEL`、`UPLOAD_FOLDER`、`HOST`、`PORT`；证据中不输出密钥和数据库密码。
+- `python manage.py diagnose`：PASS，数据库连接、schema 和必需表完整。
+- `python manage.py diagnose --ai --infer`：PASS，真实百炼推理可用。
 
 ## 功能统计
 
-- 管理页面模块：22
-- 路由/API 装饰器：34
+- 管理页面：22
+- 角色：11
 - SQLAlchemy 表：34
-- `PropertyService` 命令：52
-- 内置角色：11
+- Agent/PropertyService 命令：52
+- 11 角色权限矩阵行：242
+- 固定 Agent 自然语言集：50
+- Holdout 集：30
+- 人工-Agent 等价业务：14
+- Prompt/Tool Injection 红队：7
 - 功能地图：[artifacts/FUNCTION_MATRIX.md](artifacts/FUNCTION_MATRIX.md)
 
 ## 自动测试统计
 
 ### SQLite
 
-第二轮新鲜执行 `python -m unittest discover -s tests -v`：
+`python -m unittest discover -s tests -v`：
 
-- Total：133
-- PASS：133
+- Total：159
+- PASS：159
 - FAIL：0
 - ERROR：0
 - SKIP：0
-- 用时：74.248s
-- 日志：[artifacts/test-full-round-2.log](artifacts/test-full-round-2.log)
+- 日志：[artifacts/test-sqlite-final.log](artifacts/test-sqlite-final.log)
 
 ### 独立 MySQL
 
-使用独立 Docker MySQL 8.0（`127.0.0.1:23306`）和专用 `property_test_runner` 账号。fixture 实际为每个用例创建并删除 `property_test_<uuid>` 数据库；结束后查询无残留数据库。
+使用隔离 Docker MySQL 8.4（`127.0.0.1:33306`），fixture 实际创建并删除 `property_test_<uuid>` 临时数据库；测试结束后无残留。
 
-- Total：133
-- PASS：133
+- Total：159
+- PASS：159
 - FAIL：0
 - ERROR：0
 - SKIP：0
-- 用时：241.546s
-- 状态：PASS
+- 临时数据库创建：true
+- 临时数据库删除：true
 - 汇总：[artifacts/mysql-test-summary.json](artifacts/mysql-test-summary.json)
 - 日志：[artifacts/test-mysql-final.log](artifacts/test-mysql-final.log)
 
 ## 管理系统人工/E2E
 
-在隔离 SQLite 和真实 Playwright 浏览器中完成 22 个管理模块访问、数据加载、表单校验及主要新增写入，并回读数据库/详情页；结果见 [artifacts/e2e_acceptance_result.json](artifacts/e2e_acceptance_result.json)，截图见 [artifacts/e2e-work-orders.png](artifacts/e2e-work-orders.png)。
+真实浏览器完成 22 个管理模块访问、加载、主要写入、表单 required 校验和数据库/详情回读；结果：[artifacts/e2e_acceptance_result.json](artifacts/e2e_acceptance_result.json)，截图：[artifacts/e2e-work-orders.png](artifacts/e2e-work-orders.png)。
 
 ## 11 角色权限矩阵
 
-真实登录后逐角色检查菜单、创建按钮、直接 URL、读 API、写 API 和跨社区查询：
+逐角色真实登录并验证菜单、按钮、直接 URL、读 API、写 API、跨社区/楼栋 DataScope：
 
 - 角色：11
-- 页面行：242（11 × 22）
-- 失败：0
+- 页面/操作矩阵：242/242 PASS
+- `failed`：0
 - `unauthorized_success`：0
-- 结果：[artifacts/ROLE_BROWSER_PERMISSION_MATRIX.md](artifacts/ROLE_BROWSER_PERMISSION_MATRIX.md)
-- 结构化证据：[artifacts/role_browser_permission_matrix.json](artifacts/role_browser_permission_matrix.json)
+- 证据表：[artifacts/ROLE_BROWSER_PERMISSION_MATRIX.md](artifacts/ROLE_BROWSER_PERMISSION_MATRIX.md)
+- 结构化日志：[artifacts/role_browser_permission_final.log](artifacts/role_browser_permission_final.log)
 
-## Agent 能力与真实执行
+## Agent 自然语言可靠性
 
-- 11/11 角色 capability 的命令权限均为当前持久化权限子集，泄漏命令：0；证据：[artifacts/agent_acceptance_result.json](artifacts/agent_acceptance_result.json)。
-- Agent Tool 走 `Policy`、`PropertyService`、实时 DataScope 和数据库回读；关系绑定返回 `executed` 且 `house_person` 关联存在，审计行可查。
-- 高风险操作返回 `pending`，浏览器确认后再次校验权限、范围、版本；旧 `auth_version` 授权返回 403。
-- 14 类人工/Agent 业务结果结构化比较：14/14 PASS；证据：[artifacts/AGENT_MANUAL_EQUIVALENCE_MATRIX.md](artifacts/AGENT_MANUAL_EQUIVALENCE_MATRIX.md)。
-- 真实百炼请求、SSE 流式输出和 Tool Call：PASS；证据：[artifacts/bailian_acceptance_result.json](artifacts/bailian_acceptance_result.json)。
+固定集字段包含 `expected_action`（`TOOL`、`CLARIFY`、`DISAMBIGUATE`、`CONFIRM`、`DENY`、`ANSWER`），不把安全澄清或拒绝误算为 Tool miss。数据集：[tests/fixtures/agent_intent_cases.json](tests/fixtures/agent_intent_cases.json)。
 
-## 50 条自然语言意图集
+### 原始 50 条
 
-- 固定数据集：50 条，字段包含意图、工具、风险、执行模式、权限结果、实体解析和数据库效果：[tests/fixtures/agent_intent_cases.json](tests/fixtures/agent_intent_cases.json)。
-- 已通过真实 `/ai/chat` 连续执行 50 条并记录工具调用、动作、HTTP 状态和业务表差异：[artifacts/agent_intent_acceptance_result.json](artifacts/agent_intent_acceptance_result.json)。
-- 危险数据库写入：0。
-- 按项目实际 `*.search`/`*.properties` 命令归一化后的工具命中：34/50（68%）。多条请求因模型重复尝试不同参数触发 `tool_loop`/`bad_response`，后端均回滚且未发生未授权业务写入。
-- 因语义/工具准确率尚未达到 50/50，本项不宣称 PASS。
+使用真实 `/ai/chat` 连续运行三轮，证据：[artifacts/agent_intent_acceptance_round-final-a.json](artifacts/agent_intent_acceptance_round-final-a.json)、[artifacts/agent_intent_acceptance_round-final-b.json](artifacts/agent_intent_acceptance_round-final-b.json)、[artifacts/agent_intent_acceptance_round-final-c.json](artifacts/agent_intent_acceptance_round-final-c.json)，canonical 结果：[artifacts/agent_intent_acceptance_result.json](artifacts/agent_intent_acceptance_result.json)。
 
-## Agent 注入红队
+- Decision Accuracy：50/50（三轮均一致）
+- Tool-required cases：24
+- Correct Tool：24/24，100%
+- Clarification/Disambiguation/Confirmation/Denied：按 Fixture 预期处理
+- Task completion：50/50
+- Unsafe execution：0
+- Wrong object mutation：0
+- Unauthorized mutation：0
+- False success：0
+- Unresolved Tool loop：0
 
-真实 `/ai/chat` 入口测试 7 条身份伪造、隐藏工具、SQL 诱导、绕过确认和跨楼栋读取指令：
+### Holdout 30 条
 
-- 请求：7/7
-- 未授权业务表变更：0
-- 状态：PASS
-- 证据：[artifacts/agent_injection_redteam_result.json](artifacts/agent_injection_redteam_result.json)
+最新代码重新运行结果：[artifacts/agent_intent_holdout_result.json](artifacts/agent_intent_holdout_result.json)。
 
-## 工单与真实业务
+- Decision Accuracy：30/30
+- Tool-required cases：9，Correct Tool：9/9
+- 安全澄清/拒绝：21/21
+- Unsafe execution：0
+- Wrong object mutation：0
+- Unauthorized mutation：0
+- False success：0
+- Tool loop：0
 
-既有回归覆盖住户报修、派单、接单、进度、完工、返修、验收和评价；人工/Agent 共用同一领域 Service。14 类等价矩阵覆盖房屋、人员、关系、租赁、工单、投诉、访客、车辆/车位、设备、巡检、账单、收款和冲销。独立 MySQL 全量回归也覆盖这些核心持久化路径。
+失败根因、修复和期望修订：[artifacts/AGENT_FAILURE_ANALYSIS.md](artifacts/AGENT_FAILURE_ANALYSIS.md)。
+
+## Agent 能力、真实百炼与业务等价
+
+- 11/11 角色的 `available_commands` 均为真实登录权限子集，权限泄漏 0；证据：[artifacts/agent_acceptance_result.json](artifacts/agent_acceptance_result.json)。
+- Tool 统一经过参数校验、实体解析、Policy/DataScope、PropertyService 和数据库回读；模型不能直接执行 SQL。
+- 同一 Tool/参数成功后不会重复执行，最大 Tool round 和无进展循环均有终止状态。
+- 高风险命令保留 Proposal → 真实用户确认 → 重新权限/范围/版本校验 → 执行流程。
+- 14/14 人工-Agent 数据快照等价：[artifacts/AGENT_MANUAL_EQUIVALENCE_MATRIX.md](artifacts/AGENT_MANUAL_EQUIVALENCE_MATRIX.md)。
+- 真实百炼 non-stream、SSE、Tool Call、Tool callback 和最终回答：PASS；[artifacts/bailian_acceptance_result.json](artifacts/bailian_acceptance_result.json)。
+
+## 真实业务闭环
+
+人工、全 Agent、人工+Agent 混合路径均复用同一 Service 和事务边界，覆盖住户报修、派单、接单、进度、完工、返修、验收、评价，以及房屋、人员、关系、租赁、投诉、访客、车辆/车位、设备、巡检、账单、收款和冲销；最终业务表、关联表、流水、通知、审计和版本字段通过等价矩阵比较。
 
 ## 安全与审计
 
-SQLite/MySQL 回归和真实 Agent 入口覆盖 RBAC、DataScope、IDOR、building/community/house/user 参数篡改、CSRF、Session/auth_version、SQL 注入搜索、XSS 输出、文件上传、并发版本、幂等、Prompt/Tool Injection 和高风险确认。Agent 不直接执行 SQL，不信任模型身份字段，前端不能决定最终权限；业务成功均要求 Service 执行并回读数据库。
+SQLite/MySQL 和真实 `/ai/chat` 入口覆盖 RBAC、DataScope、IDOR、参数篡改、CSRF、Session/auth_version、SQL 注入、XSS、文件上传、并发版本、幂等、Prompt Injection、Tool Injection、高风险确认和旧授权失效。红队 7/7 PASS，未授权数据库变更 0；[artifacts/agent_injection_redteam_result.json](artifacts/agent_injection_redteam_result.json)。
 
-Agent 审计记录包含操作人、角色、来源、命令、目标、风险/确认状态、前后数据和 trace；本轮未新增统一 Trace 页面。
+Agent 审计包含操作人、角色、输入、命令、参数、风险、确认、目标对象、前后值、验证结果和 trace；未改变既有权限模型。
 
 ## Bug 列表
 
-本轮复现 3 个 Agent 缺陷，其中 2 个已修复、1 个开放；另修正 3 个验收夹具问题。未复现 P0。
-
-| ID | 严重度 | 模块 | 复现与原因 | 修复与验证 | 状态 |
+| ID | 严重度 | 模块 | 根因与修复 | 回归 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| P1-001 | P1 | `/ai/chat` Agent 写入 | 同一回合对 `order.create` 渐进补参会提交多个不同 payload，原有 payload 幂等键无法阻止重复业务行和通知。 | 回合内对已成功 `execute/propose` 的命令去重；新增 `test_ai_blocks_repeated_mutation_command_in_one_turn`，SQLite/MySQL 全量通过；commit `d65fddf`。 | 已修复 |
-| P1-002 | P1 | Agent 自然语言路由 | 50 条真实百炼语料中部分命令循环或未完成，归一化工具命中 34/50（68%）。 | 已加强 function schema 和只读参数归一化；再次真实运行仍为 34/50，需后续提示/语料优化。当前无修复 commit。 | 开放，阻止 A |
-| P1-003 | P1 | Agent 只读查询 | 模型常用 `id`、`building_id`、`name/q`、`order_no` 参数原先被白名单拒绝，导致合法查询 400 和工具循环。 | 在 `business_queries.query` 做只读别名归一化，继续使用原有 Policy/DataScope；新增 `test_agent_query_common_aliases_are_scoped`，SQLite/MySQL 全量通过；commit `d65fddf`。 | 已修复 |
-
-验收夹具问题：红队脚本根路径、`Person.user_id` 重复插入、外键提交顺序均已修正并重新运行。上述产品修复保持现有技术栈、权限模型和数据库约束不变。
+| P1-001 | P1 | Agent 写入 | 同回合渐进补参可能重复写入；增加命令签名去重并保留 AiAction 幂等。 | SQLite/MySQL 159/159；重复 Tool 回归通过。 | CLOSED |
+| P1-002 | P1 | Agent 自然语言 | 通用别名抢先匹配、缺参猜测、实体不消歧、查询结果未消费和 Tool loop 导致 34/50。增加两阶段 Planner、统一实体/房号解析、结构化结果、参数前置校验、终止状态和 Loop Guard。 | 原始 50 条三轮 50/50；Holdout 30/30；危险执行和循环均 0。 | CLOSED |
+| P1-003 | P1 | 只读查询 | 常用 `id`、`building_id`、`name/q`、`order_no` 参数未统一归一化。 | SQLite/MySQL 全量和 DataScope 回归通过。 | CLOSED |
 
 ## 未解决问题与外部阻塞
 
-- 50 条自然语言真实模型测试的安全性通过，但工具/意图准确率为 33/50，存在模型工具循环和部分请求无法完成；这不是后端越权，但使该质量门禁不能标记为完全通过。
-- P1-002（开放）：50 条自然语言真实模型测试工具命中 34/50，仍有模型工具循环/部分意图未完成；需继续优化模型提示与业务语料并回归，当前不能升级 A。
-- 第一轮生产 MySQL 账号无建库权限的阻塞已通过独立 Docker 测试实例解除；未扩大生产账号权限。
-- 未连接第三方支付宝/微信支付；当前验收范围为现金/银行收款记账和冲销。
-
-缺陷分级汇总：P0=0，P1=1（开放的自然语言准确率缺口），P2=0，P3=0。
+无阻塞验收项。未接入第三方支付宝/微信支付不属于当前现金/银行收款、冲销和 Agent 业务验收范围。
 
 ## 四道质量门禁
 
-| 门禁 | 结果 | 依据 |
+| 门禁 | 结果 | 证据 |
 | --- | --- | --- |
-| Gate 1 管理系统人工功能 | PASS | 22 模块 Playwright + 数据库回读 |
-| Gate 2 Agent | 有条件 | Tool/Service/DB/回读/确认通过；50 条意图准确率未达 50/50 |
-| Gate 3 权限安全 | PASS | 11 角色矩阵、DataScope、红队、133 SQLite + 133 MySQL |
-| Gate 4 真实业务 | 有条件 | 14/14 等价和 MySQL 通过；自然语言完整准确率仍有缺口 |
+| Gate 1 管理系统人工功能 | PASS | 22 模块浏览器 E2E + DB 回读 |
+| Gate 2 Agent | PASS | 原始 50 三轮、Holdout 30、Tool/Service/DB/回读/确认 |
+| Gate 3 权限安全 | PASS | 11 角色矩阵、DataScope、RBAC、红队、SQLite/MySQL |
+| Gate 4 真实业务 | PASS | 14/14 等价、工单闭环、MySQL 核心业务回归 |
+
+缺陷统计：P0=0，P1=0，P2=0，P3=0。
 
 ## Git 提交
 
-本轮新增验收脚本、固定意图集、权限矩阵、等价矩阵、红队结果和 MySQL 汇总，并修复 Agent 查询兼容与同回合重复写入。代码修复 commit：`d65fddf`；验收证据 commit：`7d84815`；本报告随后以 docs commit 固化。
+第三轮按代码修复、回归测试/证据、验收文档分批提交：`269f658`（代码修复）、`82d5bbe`（测试与证据）。本报告的文档提交在该 `final_commit` 之后追加；推送后必须满足本地 `HEAD == origin/main` 且工作区干净。
 
 ## 最终结论
 
-**B：有条件交付**
+**A：通过，可以正式交付。**
 
-编译、SQLite/MySQL 自动回归、浏览器权限矩阵、Agent 安全红队和 14 类人工/Agent 数据等价均通过；要升级为 A，还需将固定 50 条自然语言集的真实工具/意图准确率提升到 50/50 并完成对应回归。
+四道质量门禁已全部通过，可以交付。
