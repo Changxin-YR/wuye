@@ -80,6 +80,8 @@
 
 现有测试覆盖人工页面与 Agent 共用领域 Service、工单闭环、财务精度/冲销、关系/租赁/设备/巡检等持久化结果；本轮实测补充了浏览器人工写入与 Agent 数据库回读。真实百炼诊断、非流式推理、流式输出和 Tool Call 均通过：流式事件含 `done`，受控回调触发 1 次且参数仅含 `operation`。结果见 [artifacts/bailian_acceptance_result.json](C:/Users/27363/Desktop/tangli_miao/artifacts/bailian_acceptance_result.json)。
 
+未完成项：本轮没有伪造“50 条自然语言意图全部正确”的结论，也未完成 11 个角色逐一浏览器登录、菜单/按钮快照及人工-Agent 14 业务逐表快照比较；这些需要稳定的意图测试集、业务夹具和可写的独立 MySQL 环境后继续执行。
+
 ## Bug 列表
 
 本轮没有复现产品 P0/P1/P2 Bug，因此没有业务代码修改或修复 commit。当前 MySQL 账号缺少 `CREATE DATABASE`，服务器返回 1044；需要外部测试权限，不能由应用代码安全修复。
