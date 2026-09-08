@@ -16,7 +16,8 @@ _planner_calls = _core._planner_calls
 _safe_final_answer = _core._safe_final_answer
 
 _READ_ONLY_INTENTS = {
-    'house.search', 'building.search', 'unit.search', 'person.search', 'person.properties', 'staff.search',
+    'house.search', 'building.search', 'unit.search', 'person.search', 'person.properties',
+    'staff.search', 'complaint_staff.search', 'inspection_staff.search',
     'order.search', 'order.pending', 'complaint.search', 'complaint.stats', 'visitor.search',
     'vehicle.search', 'parking.search', 'device.search', 'inspection.search', 'fee.search',
     'payment.search', 'billing.unpaid', 'notice.read', 'whoami',
@@ -29,6 +30,8 @@ _RESOLVER_ARGUMENTS = {
     'person.search': {'person_id', 'person_name', 'phone', 'id'},
     'person.properties': {'person_id', 'person_name', 'phone', 'id'},
     'staff.search': {'staff_name', 'username', 'phone', 'community_id', 'building_id', 'id'},
+    'complaint_staff.search': {'staff_name', 'username', 'phone', 'community_id', 'building_id', 'id'},
+    'inspection_staff.search': {'staff_name', 'username', 'phone', 'community_id', 'building_id', 'id'},
     'order.search': {'order_no', 'status', 'q', 'id'},
     'order.pending': {'order_no', 'status', 'q', 'id'},
     'complaint.search': {'community_id', 'building_id', 'house_id', 'status', 'q', 'id'},
@@ -55,6 +58,7 @@ _RESOLVED_SINGLE_TARGET_INTENTS = {
 _MULTI_RESOLVE_SPECS = {
     'visitor.create': ('person.search', 'house.search'),
     'order.assign': ('order.search', 'staff.search'),
+    'complaint.assign': ('complaint.search', 'complaint_staff.search'),
 }
 
 _RESOLVER_LABELS = {
@@ -62,6 +66,9 @@ _RESOLVER_LABELS = {
     'house.search': '房屋',
     'order.search': '工单',
     'staff.search': '维修人员',
+    'complaint.search': '投诉记录',
+    'complaint_staff.search': '投诉处理人员',
+    'inspection_staff.search': '巡检人员',
 }
 
 
@@ -104,13 +111,7 @@ def _parse_call_command(call):
 
 
 def _normalize_read_call(call):
-    """Force every read capability through lookup, regardless of provider hints.
-
-    ``operation`` is model-controlled for native tool calls and can also be
-    produced by older planner fallback code. Backend queries are read-only by
-    definition, so an execute/propose label must never survive to the callback.
-    Malformed calls are left untouched for the existing validator to reject.
-    """
+    """Force every read capability through lookup, regardless of provider hints."""
     outer = _parse_call_args(call)
     command = outer.get('command')
     if command not in _READ_ONLY_INTENTS or outer.get('operation') == 'lookup':
@@ -196,6 +197,23 @@ def _multi_resolver_fallback(command, resolved=None):
                 params['community_id'] = order['community_id']
             if order.get('building_id') is not None:
                 params['building_id'] = order['building_id']
+        else:
+            return None
+    elif intent == 'complaint.assign':
+        if command == 'complaint.search':
+            complaint_id = values.get('complaint_id') or values.get('id')
+            if complaint_id:
+                params['id'] = complaint_id
+        elif command == 'complaint_staff.search':
+            assignee_name = values.get('assignee_name')
+            if not assignee_name:
+                return None
+            params['staff_name'] = assignee_name
+            complaint = resolved.get('complaint.search') or {}
+            if complaint.get('community_id') is not None:
+                params['community_id'] = complaint['community_id']
+            if complaint.get('building_id') is not None:
+                params['building_id'] = complaint['building_id']
         else:
             return None
     else:
@@ -306,6 +324,13 @@ def _multi_resolved_write_fallback(resolved):
             return None
         params = {'id': order['id'], 'version': order['version'], 'repairer_id': repairer['id']}
         return {'operation': 'execute', 'command': 'order.assign', 'arguments_json': json.dumps(params, ensure_ascii=False)}
+    if intent == 'complaint.assign':
+        complaint = resolved.get('complaint.search') or {}
+        handler = resolved.get('complaint_staff.search') or {}
+        if complaint.get('id') is None or complaint.get('version') is None or handler.get('id') is None:
+            return None
+        params = {'id': complaint['id'], 'version': complaint['version'], 'assignee_id': handler['id']}
+        return {'operation': 'execute', 'command': 'complaint.assign', 'arguments_json': json.dumps(params, ensure_ascii=False)}
     return None
 
 
@@ -324,13 +349,7 @@ def _call_matches_resolved_target(call, item):
 
 
 def _chat_common(self, query, user, conversation_id, tool_callback, system_prompt, stream=False):
-    """Run a bounded tool loop with server-verifiable execution state.
-
-    RESOLVE_FIRST binds one exact row before mutation. RESOLVE_MULTI resolves
-    every independently named business object in a server-owned sequence before
-    any write is allowed. Provider-supplied writes are ignored until resolution
-    completes, so the model cannot guess or switch identifiers.
-    """
+    """Run a bounded tool loop with server-verifiable execution state."""
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
     hint = _PLANNER_HINT.get() or {}
     clarification = hint.get('clarification_text')
