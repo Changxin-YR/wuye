@@ -127,6 +127,94 @@ class ResolverFallbackTests(unittest.TestCase):
         self.assertNotIn('777', json.dumps(callbacks, ensure_ascii=False))
         self.assertEqual(result['execution_state'], 'EXECUTED')
 
+    def test_provider_cannot_switch_target_after_resolver(self):
+        client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
+        callbacks = []
+        responses = iter([
+            {'id': 'bind-1', 'choices': [{'message': {'role': 'assistant', 'content': '先确认对象。'}}]},
+            {'id': 'bind-2', 'choices': [{'message': {
+                'role': 'assistant', 'content': None,
+                'tool_calls': [tool_call('wrong-after-lookup', 'execute', 'visitor.checkin', {'id': 88, 'version': 1})],
+            }}]},
+            {'id': 'bind-3', 'choices': [{'message': {'role': 'assistant', 'content': '已处理。'}}]},
+        ])
+
+        def tool(args):
+            callbacks.append(dict(args))
+            if args['operation'] == 'lookup':
+                return {'ok': True, 'code': 'SUCCESS', 'data': {'items': [{'id': 9, 'version': 2}]}, 'terminal': False}
+            params = json.loads(args['arguments_json'])
+            self.assertEqual(params['id'], 9)
+            self.assertEqual(params['version'], 2)
+            return {'ok': True, 'code': 'SUCCESS', 'terminal': True}
+
+        token = _PLANNER_HINT.set({
+            'action': 'TOOL', 'intent': 'visitor.checkin', 'entity_status': 'RESOLVE_FIRST',
+            'candidates': ['visitor.search', 'visitor.checkin'], 'arguments': {'status': 'registered'}, 'tool_call': None,
+        })
+        try:
+            with patch.object(client, '_request', side_effect=lambda *a, **k: next(responses)):
+                result = client.chat('让刚才那个访客进来', 'property:1:v1', tool_callback=tool)
+        finally:
+            _PLANNER_HINT.reset(token)
+
+        self.assertEqual([item['command'] for item in callbacks], ['visitor.search', 'visitor.checkin'])
+        self.assertNotIn('88', json.dumps(callbacks, ensure_ascii=False))
+        self.assertEqual(result['execution_state'], 'EXECUTED')
+
+    def test_latest_payment_is_server_selected_and_prepared_for_confirmation(self):
+        client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
+        callbacks = []
+        payloads = []
+        responses = iter([
+            {'id': 'pay-1', 'choices': [{'message': {'role': 'assistant', 'content': '我先找上一笔。'}}]},
+            {'id': 'pay-2', 'choices': [{'message': {
+                'role': 'assistant', 'content': None,
+                'tool_calls': [tool_call('wrong-payment', 'propose', 'payment.reverse', {'id': 999, 'version': 1, 'reason': '撤回'})],
+            }}]},
+            {'id': 'pay-3', 'choices': [{'message': {'role': 'assistant', 'content': '已准备冲销确认卡片。'}}]},
+        ])
+
+        def request(method, path, payload=None):
+            payloads.append(payload)
+            return next(responses)
+
+        def tool(args):
+            callbacks.append(dict(args))
+            if args['operation'] == 'lookup':
+                return {
+                    'ok': True, 'code': 'SUCCESS',
+                    'data': {'items': [
+                        {'id': 12, 'version': 3, 'amount': '88.00'},
+                        {'id': 11, 'version': 1, 'amount': '66.00'},
+                    ]},
+                    'terminal': False,
+                }
+            params = json.loads(args['arguments_json'])
+            self.assertEqual(args['operation'], 'propose')
+            self.assertEqual(args['command'], 'payment.reverse')
+            self.assertEqual(params['id'], 12)
+            self.assertEqual(params['version'], 3)
+            return {'ok': True, 'code': 'CONFIRMATION_REQUIRED', 'terminal': True}
+
+        token = _PLANNER_HINT.set({
+            'action': 'CONFIRM', 'intent': 'payment.reverse', 'entity_status': 'RESOLVE_FIRST',
+            'candidates': ['payment.search', 'payment.reverse'],
+            'arguments': {'_resolve_strategy': 'latest'}, 'tool_call': None,
+        })
+        try:
+            with patch.object(client, '_request', side_effect=request):
+                result = client.chat('撤回上一笔收款记录', 'property:1:v1', tool_callback=tool)
+        finally:
+            _PLANNER_HINT.reset(token)
+
+        self.assertEqual([item['command'] for item in callbacks], ['payment.search', 'payment.reverse'])
+        self.assertNotIn('999', json.dumps(callbacks, ensure_ascii=False))
+        self.assertEqual(result['execution_state'], 'PENDING_CONFIRMATION')
+        second_messages = json.dumps(payloads[1]['messages'], ensure_ascii=False)
+        self.assertIn('"id": 12', second_messages)
+        self.assertNotIn('"id": 11', second_messages)
+
     def test_ambiguous_resolver_result_stops_before_write(self):
         client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
         callbacks = []
