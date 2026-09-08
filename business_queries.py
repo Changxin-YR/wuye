@@ -10,13 +10,19 @@ from permissions import Policy
 from property_service import snapshot
 
 
+STAFF_QUERY_SPECS = {
+    "staff.search": ("order.dispatch", "order.work"),
+    "complaint_staff.search": ("complaint.handle", "complaint.handle"),
+    "inspection_staff.search": ("inspection.assign", "inspection.write"),
+}
+
 QUERIES = {
     "house.search": "property.read",
     "building.search": "property.read",
     "unit.search": "property.read",
     "person.search": "person.read",
     "person.properties": "person.read",
-    "staff.search": "order.dispatch",
+    **{command: actor_permission for command, (actor_permission, _) in STAFF_QUERY_SPECS.items()},
     "order.search": "order.read",
     "order.pending": "order.read",
     "complaint.search": "complaint.read",
@@ -69,7 +75,7 @@ def _clean_args(command, args):
             if alias in args:
                 args["person_name"] = args.pop(alias)
                 break
-    if command == "staff.search" and "staff_name" not in args:
+    if command in STAFF_QUERY_SPECS and "staff_name" not in args:
         for alias in ("name", "q", "keywords"):
             if alias in args:
                 args["staff_name"] = args.pop(alias)
@@ -204,7 +210,8 @@ def query(db, actor, command, args):
             q = q.where(Person.phone == args["phone"])
         return _items(db.scalars(q.limit(101)))
 
-    if command == "staff.search":
+    if command in STAFF_QUERY_SPECS:
+        _, required_worker_permission = STAFF_QUERY_SPECS[command]
         cid = args.get("community_id")
         bid = args.get("building_id")
         if bid:
@@ -217,7 +224,7 @@ def query(db, actor, command, args):
             policy.require_scope(cid, bid)
         eligible = select(UserRole.user_id).join(
             RolePermission, RolePermission.role_code == UserRole.role_code
-        ).where(RolePermission.permission == "order.work")
+        ).where(RolePermission.permission == required_worker_permission)
         q = policy.query(User).where(User.active.is_(True), User.id.in_(eligible))
         if args.get("id"):
             q = q.where(User.id == args["id"])
