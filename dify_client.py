@@ -1,8 +1,8 @@
 """Compatibility and safety wrapper for direct model providers.
 
 The stable provider implementation lives in :mod:`dify_client_core`. This
-wrapper tightens final-answer semantics and repeated-tool termination without
-copying authorization logic out of the backend gateway.
+wrapper tightens final-answer semantics, repeated-tool termination and safe
+contextual resolution without copying authorization logic out of the backend.
 """
 import json
 import uuid
@@ -20,6 +20,27 @@ _READ_ONLY_INTENTS = {
     'order.search', 'order.pending', 'complaint.search', 'complaint.stats', 'visitor.search',
     'vehicle.search', 'parking.search', 'device.search', 'inspection.search', 'fee.search',
     'payment.search', 'billing.unpaid', 'notice.read', 'whoami',
+}
+
+_RESOLVER_ARGUMENTS = {
+    'house.search': {'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id', 'id'},
+    'building.search': {'community_id', 'building_id', 'building_name', 'building', 'name', 'id'},
+    'unit.search': {'building_id', 'unit_id', 'unit', 'unit_name', 'name', 'id'},
+    'person.search': {'person_id', 'person_name', 'phone', 'id'},
+    'person.properties': {'person_id', 'person_name', 'phone', 'id'},
+    'order.search': {'order_no', 'status', 'q', 'id'},
+    'order.pending': {'order_no', 'status', 'q', 'id'},
+    'complaint.search': {'community_id', 'building_id', 'house_id', 'status', 'q', 'id'},
+    'visitor.search': {'community_id', 'building_id', 'house_id', 'status', 'phone', 'name', 'id'},
+    'vehicle.search': {'community_id', 'building_id', 'house_id', 'person_id', 'status', 'plate', 'id'},
+    'parking.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
+    'device.search': {'community_id', 'building_id', 'status', 'category', 'code', 'name', 'id'},
+    'inspection.search': {'community_id', 'building_id', 'device_id', 'assignee_id', 'status', 'id'},
+    'fee.search': {'community_id', 'fee_item_id', 'name', 'id'},
+    'payment.search': {'bill_id', 'status', 'id'},
+    'billing.unpaid': {'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id', 'person_id', 'month', 'id'},
+    'notice.read': {'community_id', 'building_id'},
+    'whoami': set(),
 }
 
 
@@ -43,6 +64,48 @@ def _expected_write():
     return isinstance(fallback, dict) and fallback.get('operation') in {'execute', 'propose'}
 
 
+def _context_resolver_fallback():
+    """Build one read-only resolver call for a RESOLVE_FIRST plan.
+
+    This never invents ids and never upgrades authority. The candidate list has
+    already been intersected with the logged-in user's server-side capabilities;
+    the backend query performs Policy/DataScope checks again.
+    """
+    hint = _PLANNER_HINT.get() or {}
+    if hint.get('entity_status') != 'RESOLVE_FIRST':
+        return None
+    candidates = [item for item in hint.get('candidates', ()) if item in _READ_ONLY_INTENTS]
+    if not candidates:
+        return None
+    command = candidates[0]
+    values = dict(hint.get('arguments') or {})
+    allowed = _RESOLVER_ARGUMENTS.get(command, set())
+    params = {key: value for key, value in values.items() if key in allowed and value not in (None, '')}
+    # Normalize planner-side business aliases to resolver field names.
+    if command == 'device.search' and 'code' not in params and values.get('device_code'):
+        params['code'] = values['device_code']
+    if command == 'visitor.search' and 'name' not in params and values.get('visitor_name'):
+        params['name'] = values['visitor_name']
+    if command == 'parking.search' and 'space_code' not in params and values.get('space_code'):
+        params['space_code'] = values['space_code']
+    return {
+        'operation': 'lookup',
+        'command': command,
+        'arguments_json': json.dumps(params, ensure_ascii=False),
+    }
+
+
+def _synthetic_call(args, call_id='planner-fallback'):
+    return {
+        'id': call_id,
+        'type': 'function',
+        'function': {
+            'name': 'property_agent_tool',
+            'arguments': json.dumps(args, ensure_ascii=False),
+        },
+    }
+
+
 def _chat_common(self, query, user, conversation_id, tool_callback, system_prompt, stream=False):
     """Run a bounded tool loop with server-verifiable execution state."""
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
@@ -52,6 +115,7 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
     no_progress = 0
     force_final = False
     planner_fallback_used = False
+    resolver_fallback_used = False
     pending = False
     executed = False
     lookup_performed = False
@@ -99,19 +163,17 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             provider_calls = []
 
         calls = _core._planner_calls(message, provider_calls, force_final, not planner_fallback_used) if allow_tools else []
-        if allow_tools and not provider_calls and not calls and not planner_fallback_used:
+        if allow_tools and not provider_calls and not calls:
             fallback = (_PLANNER_HINT.get() or {}).get('tool_call')
-            if isinstance(fallback, dict):
-                calls = [{
-                    'id': 'planner-fallback',
-                    'type': 'function',
-                    'function': {
-                        'name': 'property_agent_tool',
-                        'arguments': json.dumps(fallback, ensure_ascii=False),
-                    },
-                }]
+            if isinstance(fallback, dict) and not planner_fallback_used:
+                calls = [_synthetic_call(fallback)]
+                planner_fallback_used = True
+            elif not resolver_fallback_used:
+                resolver = _context_resolver_fallback()
+                if isinstance(resolver, dict):
+                    calls = [_synthetic_call(resolver, 'planner-resolver')]
+                    resolver_fallback_used = True
         if not provider_calls and calls:
-            planner_fallback_used = True
             message = dict(message)
             message['role'] = 'assistant'
             message['tool_calls'] = calls
