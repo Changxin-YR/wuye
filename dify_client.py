@@ -20,7 +20,7 @@ _READ_ONLY_INTENTS = {
     'staff.search', 'complaint_staff.search', 'inspection_staff.search',
     'order.search', 'order.pending', 'complaint.search', 'complaint.stats', 'visitor.search',
     'vehicle.search', 'parking.search', 'parking_use.search', 'device.search', 'inspection.search', 'fee.search',
-    'payment.search', 'billing.unpaid', 'notice.read', 'whoami',
+    'bill.search', 'payment.search', 'billing.unpaid', 'notice.read', 'whoami',
 }
 
 _RESOLVER_ARGUMENTS = {
@@ -42,8 +42,9 @@ _RESOLVER_ARGUMENTS = {
     'device.search': {'community_id', 'building_id', 'status', 'category', 'code', 'name', 'id'},
     'inspection.search': {'community_id', 'building_id', 'device_id', 'assignee_id', 'status', 'id'},
     'fee.search': {'community_id', 'fee_item_id', 'name', 'id'},
+    'bill.search': {'bill_id', 'id', 'community_id', 'building_id', 'house_id', 'fee_item_id', 'status', 'month'},
     'payment.search': {'bill_id', 'status', 'id'},
-    'billing.unpaid': {'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id', 'person_id', 'month', 'id'},
+    'billing.unpaid': {'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id', 'person_id', 'month', 'bill_id', 'id'},
     'notice.read': {'community_id', 'building_id'},
     'whoami': set(),
 }
