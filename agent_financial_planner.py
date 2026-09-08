@@ -134,6 +134,20 @@ def repair_financial_plan(text, result, authorized_commands):
     if reference:
         values['reference'] = reference
 
+    # A common spoken form is “给A栋101生成物业费账单”. The legacy detector sees
+    # “栋 ... 生成” and can classify it as batch billing before it reaches the
+    # single-house pattern. If a concrete room is present and the user did not
+    # explicitly ask for a batch/whole-building operation, this is one bill.
+    batch_words = re.search(r'批量|整栋|全栋|整幢|全楼|整楼|所有房|全部房|这一栋全部|这栋全部', str(text or ''))
+    if (
+        intent == 'bill.batch'
+        and values.get('building_name')
+        and values.get('room_no') is not None
+        and not batch_words
+        and 'bill.create' in authorized
+    ):
+        intent = 'bill.create'
+
     # Never accept model/internal identifiers for fee/building/house resolution.
     for key in ('fee_item_id', 'building_id', 'house_id', 'version'):
         values.pop(key, None)
