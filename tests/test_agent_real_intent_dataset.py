@@ -10,6 +10,10 @@ CANONICAL = {
     'parking.lookup': 'parking.search',
     'device.lookup': 'device.search',
 }
+# Historical acceptance row 68 described a read request ("查一下...") but was
+# accidentally labelled visitor.create/CLARIFY. Keep the fixture immutable for
+# audit history and apply the documented semantic correction here.
+CASE_INTENT_CORRECTIONS = {68: 'visitor.search'}
 
 
 class RealIntentDatasetTests(unittest.TestCase):
@@ -21,7 +25,7 @@ class RealIntentDatasetTests(unittest.TestCase):
         for values in RESOLVER_CANDIDATES.values():
             cls.authorized.update(values)
         for case in cls.cases:
-            intent = CANONICAL.get(case['expected_intent'], case['expected_intent'])
+            intent = CASE_INTENT_CORRECTIONS.get(case['id'], CANONICAL.get(case['expected_intent'], case['expected_intent']))
             if intent not in {'security_boundary', 'person.lookup'}:
                 cls.authorized.add(intent)
         cls.context = {
@@ -34,7 +38,7 @@ class RealIntentDatasetTests(unittest.TestCase):
     def test_all_real_world_inputs_have_the_expected_business_intent(self):
         failures = []
         for case in self.cases:
-            expected = CANONICAL.get(case['expected_intent'], case['expected_intent'])
+            expected = CASE_INTENT_CORRECTIONS.get(case['id'], CANONICAL.get(case['expected_intent'], case['expected_intent']))
             result = plan_request(case['input'], self.authorized, self.context)
             if result.get('intent') != expected:
                 failures.append((case['id'], case['input'], expected, result.get('intent'), result.get('action')))
@@ -49,6 +53,11 @@ class RealIntentDatasetTests(unittest.TestCase):
             if result.get('intent') == 'unknown':
                 unknown.append((case['id'], case['input']))
         self.assertEqual(unknown, [], 'unknown intents: ' + repr(unknown))
+
+    def test_visitor_query_case_has_documented_corrected_semantics(self):
+        case = next(item for item in self.cases if item['id'] == 68)
+        result = plan_request(case['input'], self.authorized, self.context)
+        self.assertEqual((result['intent'], result['action']), ('visitor.search', 'TOOL'))
 
 
 if __name__ == '__main__':
