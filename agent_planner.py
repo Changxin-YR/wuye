@@ -166,6 +166,46 @@ def _smooth_context_resolution(text, result, authorized_commands):
     }
 
 
+def _repair_exact_community_followup(text, result, context, authorized_commands):
+    """Accept an exact writable community name even when it has no generic suffix.
+
+    Operators often answer a scope question with the persisted name only, e.g.
+    ``春风苑``. Matching is restricted to the current actor's writable community
+    catalog; zero or multiple matches remain a clarification instead of guessing.
+    """
+    if result.get('action') != 'CLARIFY' or result.get('intent') not in {'notice.save', 'notice.batch_publish'}:
+        return result
+    missing = list(result.get('missing_fields') or [])
+    if 'community_id' not in missing:
+        return result
+    writable = (context or {}).get('writable_communities')
+    if not isinstance(writable, list):
+        return result
+    answer = str(text or '').strip()
+    matches = [row for row in writable if isinstance(row, dict) and str(row.get('name') or '').strip() == answer]
+    if len(matches) != 1 or not matches[0].get('id'):
+        return result
+    arguments = dict(result.get('arguments') or {})
+    arguments['community_name'] = matches[0]['name']
+    arguments['community_id'] = matches[0]['id']
+    remaining = [slot for slot in missing if slot != 'community_id']
+    if remaining:
+        repaired = dict(result)
+        repaired['missing_fields'] = remaining
+        repaired['arguments'] = arguments
+        return repaired
+    intent = result.get('intent')
+    clear_pending_plan()
+    return {
+        'action': 'CONFIRM' if intent in CONFIRM_INTENTS else 'TOOL',
+        'intent': intent,
+        'candidates': _candidates(intent, set(authorized_commands or ())),
+        'missing_fields': [],
+        'entity_status': 'RESOLVED',
+        'arguments': arguments,
+    }
+
+
 def _clarification_text(result):
     """Ask for the first genuinely missing business fact, never an ORM detail."""
     action = result.get('action')
@@ -226,14 +266,13 @@ def _clarification_text(result):
 
 
 def _use_local_clarification(result):
-    """Attach deterministic wording without changing planner state.
-
-    CLARIFY/DISAMBIGUATE are state-machine decisions used by pending-plan,
-    idempotency and provider guards. Presentation must never rewrite them into
-    ANSWER. The HTTP layer may display ``clarification_text`` directly while the
-    original action remains authoritative.
-    """
+    """Attach deterministic wording without changing planner state."""
     if result.get('action') not in {'CLARIFY', 'DISAMBIGUATE'}:
+        return result
+    # REPEAT is a safety/idempotency state, not a normal missing-slot question.
+    # It must continue to the provider/tool guard so an existing mutation can be
+    # detected without creating a duplicate record.
+    if result.get('entity_status') == 'REPEAT':
         return result
     shown = dict(result)
     shown['clarification_text'] = _clarification_text(result)
@@ -252,5 +291,6 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_device_code(result)
     result = _repair_order_cancel(text, result, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
+    result = _repair_exact_community_followup(text, result, context, authorized_commands)
     result = _use_local_clarification(result)
     return result
