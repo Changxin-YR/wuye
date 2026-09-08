@@ -78,7 +78,6 @@ def _repair_payment_target(text, result, authorized_commands):
 
 
 def _repair_device_code(result):
-    """Keep device identifiers explicit and compatible with the current gateway."""
     if result.get('intent') not in {'device.save', 'device.search', 'device.archive', 'inspection.create'}:
         return result
     arguments = dict(result.get('arguments') or {})
@@ -86,8 +85,6 @@ def _repair_device_code(result):
     if code:
         arguments['device_code'] = str(code).upper()
         arguments['code'] = str(code).upper()
-        # Legacy app.py builder currently reads space_code for device.save.
-        # Mirroring is compatibility only; the backend still validates the command.
         if result.get('intent') == 'device.save':
             arguments.setdefault('space_code', str(code).upper())
         result = dict(result)
@@ -95,14 +92,39 @@ def _repair_device_code(result):
     return result
 
 
-def _smooth_context_resolution(text, result, authorized_commands):
-    """Prefer a scoped lookup over asking users for internal ids.
+def _repair_order_cancel(text, result, authorized_commands):
+    """Explicit cancel/withdraw wording outranks descriptive 'already fixed' text."""
+    if not re.search(r'(?:撤销|取消).*(?:报修|工单)|(?:报修|工单).*(?:撤销|取消)', text):
+        return result
+    authorized = set(authorized_commands or ())
+    candidates = [item for item in ('order.search', 'order.cancel') if item in authorized]
+    if 'order.cancel' not in candidates:
+        return result
+    arguments = dict(result.get('arguments') or {})
+    action = 'CONFIRM'
+    if not arguments.get('order_no'):
+        # “我的报修/刚才的报修” should resolve inside the caller's scope instead
+        # of being mistaken for completion merely because the user says it was
+        # already fixed by themselves.
+        return {
+            'action': action,
+            'intent': 'order.cancel',
+            'candidates': candidates,
+            'missing_fields': [],
+            'entity_status': 'RESOLVE_FIRST',
+            'arguments': arguments,
+        }
+    return {
+        'action': action,
+        'intent': 'order.cancel',
+        'candidates': candidates,
+        'missing_fields': [],
+        'entity_status': 'RESOLVED',
+        'arguments': arguments,
+    }
 
-    The provider receives only authorized resolver commands.  It must look up the
-    current business object first, continue only for a unique candidate and ask
-    for clarification when the lookup is empty/ambiguous.  Backend Policy and
-    DataScope remain the final authority.
-    """
+
+def _smooth_context_resolution(text, result, authorized_commands):
     if result.get('action') != 'CLARIFY':
         return result
     intent = result.get('intent')
@@ -116,7 +138,6 @@ def _smooth_context_resolution(text, result, authorized_commands):
     if not candidates or intent not in candidates:
         return result
     arguments = dict(result.get('arguments') or {})
-    # Give the resolver a useful state hint without inventing an object id.
     if intent == 'visitor.checkin':
         arguments.setdefault('status', 'registered')
     elif intent == 'visitor.checkout':
@@ -145,12 +166,12 @@ def plan_request(message, authorized_commands, context=None):
     text = str(message or '').strip()
     result = _state_plan_request(text, authorized_commands, context)
 
-    # “发布一个维修工单” is a create-order phrase, not a public announcement.
     if result.get('intent') == 'unknown' and re.search(r'发布.*(?:维修|报修).*工单|发布.*工单', text):
         result = _state_plan_request(re.sub(r'^发布', '创建', text, count=1), authorized_commands, context)
 
     result = _repair_notice_content(text, result)
     result = _repair_payment_target(text, result, authorized_commands)
     result = _repair_device_code(result)
+    result = _repair_order_cancel(text, result, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
     return result
