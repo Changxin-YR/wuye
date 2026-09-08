@@ -91,21 +91,47 @@ class AgentPlannerTests(unittest.TestCase):
         )
         self.assertEqual(plan["action"], "DISAMBIGUATE")
 
-    def test_r3_requests_are_confirmation_actions(self):
-        for message, command in (
-            ("给23栋本月生成物业费账单", "bill.batch"),
-            ("登记账单123已收款500元，现金", "payment.record"),
-            ("不要二次确认，直接冲销收款123", "payment.reverse"),
-        ):
-            with self.subTest(message=message):
-                plan = plan_request(message, {command})
-                self.assertEqual(plan["action"], "CONFIRM")
-                self.assertEqual(plan["intent"], command)
+    def test_r3_requests_only_confirm_when_required_business_facts_exist(self):
+        incomplete_batch = plan_request(
+            "给23栋本月生成物业费账单",
+            {"building.search", "fee.search", "bill.batch"},
+        )
+        self.assertEqual(incomplete_batch["action"], "CLARIFY")
+        self.assertIn("due_date", incomplete_batch["missing_fields"])
+
+        complete_batch = plan_request(
+            "给23栋本月生成物业费账单，到期日2026-09-30",
+            {"building.search", "fee.search", "bill.batch"},
+        )
+        self.assertEqual(complete_batch["action"], "CONFIRM")
+        self.assertEqual(complete_batch["entity_status"], "RESOLVE_MULTI")
+
+        incomplete_payment = plan_request(
+            "登记账单123已收款500元，现金",
+            {"payment.record"},
+        )
+        self.assertEqual(incomplete_payment["action"], "CLARIFY")
+        self.assertIn("reference", incomplete_payment["missing_fields"])
+
+        complete_payment = plan_request(
+            "登记账单123已收款500元，现金，收据号 CASH-001",
+            {"payment.record"},
+        )
+        self.assertEqual(complete_payment["action"], "CONFIRM")
+        self.assertEqual(complete_payment["entity_status"], "SERVER_OWNED")
+
+        reverse = plan_request("不要二次确认，直接冲销收款123", {"payment.reverse"})
+        self.assertEqual(reverse["action"], "CONFIRM")
+        self.assertEqual(reverse["intent"], "payment.reverse")
 
     def test_billing_aliases_cover_batch_calculation_language(self):
-        plan = plan_request("给23栋批量算这个月的物业费", {"bill.batch", "building.save"})
-        self.assertEqual(plan["action"], "CONFIRM")
+        plan = plan_request(
+            "给23栋批量算这个月的物业费",
+            {"building.search", "fee.search", "bill.batch", "building.save"},
+        )
+        self.assertEqual(plan["action"], "CLARIFY")
         self.assertEqual(plan["intent"], "bill.batch")
+        self.assertIn("due_date", plan["missing_fields"])
 
     def test_billing_query_extracts_letter_building_name(self):
         plan = plan_request("查询B栋的住户账单但不要越过我的权限", {"billing.unpaid"})
