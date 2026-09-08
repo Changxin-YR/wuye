@@ -44,7 +44,10 @@ _RESOLVER_ARGUMENTS = {
     'fee.search': {'community_id', 'fee_item_id', 'name', 'id'},
     'bill.search': {'bill_id', 'id', 'community_id', 'building_id', 'house_id', 'fee_item_id', 'status', 'month'},
     'payment.search': {'bill_id', 'status', 'id'},
-    'billing.unpaid': {'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id', 'person_id', 'month', 'bill_id', 'id'},
+    'billing.unpaid': {
+        'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id',
+        'person_id', 'person_name', 'phone', 'month', 'bill_id', 'id'
+    },
     'notice.read': {'community_id', 'building_id', 'building_name', 'building'},
     'whoami': set(),
 }
@@ -92,7 +95,19 @@ _PLANNER_OWNED_READ_FIELDS = {
     'fee.search': {'id': ('id', 'fee_item_id')},
     'bill.search': {'bill_id': ('bill_id', 'id')},
     'payment.search': {'id': ('id', 'payment_id'), 'bill_id': ('bill_id',)},
-    'billing.unpaid': {'bill_id': ('bill_id',)},
+    'billing.unpaid': {
+        'community_id': ('community_id',),
+        'building_id': ('building_id',),
+        'building_name': ('building_name', 'building'),
+        'unit': ('unit', 'unit_name'),
+        'room_no': ('room_no',),
+        'house_id': ('house_id',),
+        'person_id': ('person_id',),
+        'person_name': ('person_name', 'name'),
+        'phone': ('phone',),
+        'month': ('month',),
+        'bill_id': ('bill_id',),
+    },
     'notice.read': {
         'community_id': ('community_id',),
         'building_id': ('building_id',),
@@ -234,10 +249,6 @@ def _normalize_read_call(call):
     owned = _planner_owned_read_params(command)
     if owned is not None:
         outer['arguments_json'] = json.dumps(owned, ensure_ascii=False)
-    # An explicit pure read such as “查看车位使用记录12” may keep the
-    # planner-owned relation id above. Resolver flows for parking.release are
-    # different: the provider/model must never inject a ParkingUse internal id,
-    # so non-owned calls are restricted to user-visible business fields.
     if command == 'parking_use.search' and owned is None:
         try:
             params = json.loads(outer.get('arguments_json') or '{}')
