@@ -261,6 +261,45 @@ def _repair_inspection_create(text, result, context, authorized_commands):
     }
 
 
+def _repair_parking_assign(result, authorized_commands):
+    """Resolve parking space and vehicle by user-visible business identifiers."""
+    if result.get('intent') != 'parking.assign':
+        return result
+    values = dict(result.get('arguments') or {})
+    if values.get('space_code'):
+        values['space_code'] = str(values['space_code']).strip().upper()
+    if values.get('plate'):
+        values['plate'] = str(values['plate']).strip().upper().replace(' ', '')
+    missing = []
+    if not values.get('space_code'):
+        missing.append('space')
+    if not values.get('plate'):
+        missing.append('vehicle')
+    required = ('parking.search', 'vehicle.search', 'parking.assign')
+    authorized = set(authorized_commands or ())
+    candidates = [command for command in required if command in authorized]
+    if missing:
+        return {
+            'action': 'CLARIFY',
+            'intent': 'parking.assign',
+            'candidates': candidates,
+            'missing_fields': missing,
+            'entity_status': 'MISSING',
+            'arguments': values,
+        }
+    if not all(command in authorized for command in required):
+        return result
+    clear_pending_plan()
+    return {
+        'action': 'TOOL',
+        'intent': 'parking.assign',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_MULTI',
+        'arguments': values,
+    }
+
+
 def _smooth_context_resolution(text, result, authorized_commands):
     if result.get('action') != 'CLARIFY':
         return result
@@ -483,6 +522,7 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_order_assign(result, context, authorized_commands)
     result = _repair_complaint_assign(text, result, context, authorized_commands)
     result = _repair_inspection_create(text, result, context, authorized_commands)
+    result = _repair_parking_assign(result, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
     result = _repair_exact_community_followup(text, result, context, authorized_commands)
     result = _repair_visitor_create(text, result, context, authorized_commands)
