@@ -53,6 +53,28 @@ def _repair_payment_target(text, result, authorized_commands):
     }
 
 
+def _repair_device_code(result):
+    """Keep device identifiers explicit and compatible with the current gateway.
+
+    ``app.py`` still has a conservative legacy builder that reads ``space_code``
+    for ``device.save``.  Preserve the canonical device fields and mirror the
+    value only for that builder; backend command normalization still rejects a
+    device id that does not resolve inside the actor's DataScope.
+    """
+    if result.get('intent') not in {'device.save', 'device.search', 'device.archive', 'inspection.create'}:
+        return result
+    arguments = dict(result.get('arguments') or {})
+    code = arguments.get('device_code') or arguments.get('code')
+    if code:
+        arguments['device_code'] = str(code).upper()
+        arguments['code'] = str(code).upper()
+        if result.get('intent') == 'device.save':
+            arguments.setdefault('space_code', str(code).upper())
+        result = dict(result)
+        result['arguments'] = arguments
+    return result
+
+
 def plan_request(message, authorized_commands, context=None):
     text = str(message or '').strip()
     result = _state_plan_request(text, authorized_commands, context)
@@ -63,4 +85,5 @@ def plan_request(message, authorized_commands, context=None):
 
     result = _repair_notice_content(text, result)
     result = _repair_payment_target(text, result, authorized_commands)
+    result = _repair_device_code(result)
     return result
