@@ -170,7 +170,7 @@ class ResolverFallbackTests(unittest.TestCase):
             {'id': 'pay-1', 'choices': [{'message': {'role': 'assistant', 'content': '我先找上一笔。'}}]},
             {'id': 'pay-2', 'choices': [{'message': {
                 'role': 'assistant', 'content': None,
-                'tool_calls': [tool_call('wrong-payment', 'propose', 'payment.reverse', {'id': 999, 'version': 1, 'reason': '撤回'})],
+                'tool_calls': [tool_call('wrong-payment', 'propose', 'payment.reverse', {'id': 999, 'version': 1, 'reason': '模型自编原因'})],
             }}]},
             {'id': 'pay-3', 'choices': [{'message': {'role': 'assistant', 'content': '已准备冲销确认卡片。'}}]},
         ])
@@ -195,21 +195,23 @@ class ResolverFallbackTests(unittest.TestCase):
             self.assertEqual(args['command'], 'payment.reverse')
             self.assertEqual(params['id'], 12)
             self.assertEqual(params['version'], 3)
+            self.assertEqual(params['reason'], '重复入账')
             return {'ok': True, 'code': 'CONFIRMATION_REQUIRED', 'terminal': True}
 
         token = _PLANNER_HINT.set({
             'action': 'CONFIRM', 'intent': 'payment.reverse', 'entity_status': 'RESOLVE_FIRST',
             'candidates': ['payment.search', 'payment.reverse'],
-            'arguments': {'_resolve_strategy': 'latest'}, 'tool_call': None,
+            'arguments': {'_resolve_strategy': 'latest', 'reason': '重复入账'}, 'tool_call': None,
         })
         try:
             with patch.object(client, '_request', side_effect=request):
-                result = client.chat('撤回上一笔收款记录', 'property:1:v1', tool_callback=tool)
+                result = client.chat('撤回上一笔收款记录，重复入账', 'property:1:v1', tool_callback=tool)
         finally:
             _PLANNER_HINT.reset(token)
 
         self.assertEqual([item['command'] for item in callbacks], ['payment.search', 'payment.reverse'])
         self.assertNotIn('999', json.dumps(callbacks, ensure_ascii=False))
+        self.assertNotIn('模型自编原因', json.dumps(callbacks, ensure_ascii=False))
         self.assertEqual(result['execution_state'], 'PENDING_CONFIRMATION')
         resolver_tool = next(
             item for item in payloads[1]['messages']
@@ -224,7 +226,7 @@ class ResolverFallbackTests(unittest.TestCase):
         )
         outer = json.loads(resolved_write['tool_calls'][0]['function']['arguments'])
         params = json.loads(outer['arguments_json'])
-        self.assertEqual((params['id'], params['version']), (12, 3))
+        self.assertEqual((params['id'], params['version'], params['reason']), (12, 3, '重复入账'))
 
     def test_ambiguous_resolver_result_stops_before_write(self):
         client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
