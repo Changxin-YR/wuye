@@ -52,12 +52,18 @@ class SmoothContextPlannerTests(unittest.TestCase):
         self.assertEqual(plan['arguments']['status'], 'retired')
         self.assertEqual(plan['candidates'], ['device.search', 'device.archive'])
 
-    def test_previous_payment_resolves_then_confirms(self):
-        plan = plan_request('撤回上一笔收款记录', ALL, {})
+    def test_previous_payment_requires_reason_then_resolves_and_confirms(self):
+        incomplete = plan_request('撤回上一笔收款记录', ALL, {})
+        self.assertEqual(incomplete['intent'], 'payment.reverse')
+        self.assertEqual(incomplete['action'], 'CLARIFY')
+        self.assertIn('reason', incomplete['missing_fields'])
+
+        plan = plan_request('撤回上一笔收款记录，重复入账', ALL, {})
         self.assertEqual(plan['intent'], 'payment.reverse')
         self.assertEqual(plan['action'], 'CONFIRM')
         self.assertEqual(plan['entity_status'], 'RESOLVE_FIRST')
         self.assertEqual(plan['candidates'], ['payment.search', 'payment.reverse'])
+        self.assertEqual(plan['arguments']['reason'], '重复入账')
 
     def test_smoothness_never_expands_authorization(self):
         plan = plan_request('确认刚才的访客进入', {'visitor.search'}, {})
