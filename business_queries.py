@@ -174,6 +174,8 @@ def query(db, actor, command, args):
                 Bill.house_id.in_(houses.with_only_columns(House.id)),
                 Bill.status.in_(["unpaid", "partial"]),
             )
+            if args.get("bill_id"):
+                q = q.where(Bill.id == args["bill_id"])
             if args.get("month"):
                 q = q.where(Bill.period == args["month"])
             return _items(db.scalars(q.limit(101)))
