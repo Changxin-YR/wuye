@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 from werkzeug.security import generate_password_hash
 
+from agent_planner import plan_request
 from app import create_app
 from database_fixture import test_database
 from models import AiGrant, User, utcnow
@@ -118,6 +119,13 @@ class BillingUnpaidBillIdScopeTests(unittest.TestCase):
             'period': period,
             'due_date': period + '-28',
         })['id']
+
+    def test_natural_language_bill_number_becomes_bill_id_filter(self):
+        plan = plan_request('查询账单123', {'billing.unpaid'})
+        self.assertEqual(plan['intent'], 'billing.unpaid')
+        self.assertEqual(plan['action'], 'TOOL')
+        self.assertEqual(plan['arguments']['bill_id'], 123)
+        self.assertEqual(plan['candidates'], ['billing.unpaid'])
 
     def test_bill_id_is_exact_filter_and_combines_with_other_filters(self):
         _, house_a = self.make_house('A栋', 101)
