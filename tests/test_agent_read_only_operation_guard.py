@@ -1,11 +1,14 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from dify_client import (
+    BailianClient,
     _PLANNER_HINT,
     _READ_ONLY_INTENTS,
     _expected_write,
     _normalize_read_call,
+    _planner_read_fallback,
     _synthetic_call,
 )
 
@@ -83,6 +86,54 @@ class ReadOnlyOperationGuardTests(unittest.TestCase):
             _PLANNER_HINT.reset(token)
         args = self._args(normalized)
         self.assertEqual(json.loads(args['arguments_json']), {'status': 'inside'})
+
+    def test_missing_provider_tool_call_uses_planner_read_fallback_once(self):
+        token = _PLANNER_HINT.set({
+            'action': 'TOOL',
+            'intent': 'complaint.search',
+            'candidates': ['complaint.search'],
+            'arguments': {'id': 123, 'complaint_id': 123},
+        })
+        seen = []
+        client = BailianClient('http://agent.invalid', 'fixture-key', 'qwen-plus')
+        responses = iter([
+            {'id': 'one', 'choices': [{'message': {'content': '我来查一下'}}]},
+            {'id': 'two', 'choices': [{'message': {'content': '投诉单123当前状态已查询。'}}]},
+        ])
+
+        def tool(args):
+            seen.append(dict(args))
+            return {
+                'ok': True,
+                'code': 'SUCCESS',
+                'data': {'items': [{'id': 123, 'status': 'open'}]},
+                'terminal': True,
+            }
+
+        try:
+            with patch.object(client, '_request', side_effect=lambda *args, **kwargs: next(responses)):
+                result = client.chat('查看投诉单123的状态', 'admin', None, tool)
+        finally:
+            _PLANNER_HINT.reset(token)
+        self.assertEqual(result['execution_state'], 'LOOKUP_ONLY')
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]['operation'], 'lookup')
+        self.assertEqual(seen[0]['command'], 'complaint.search')
+        self.assertEqual(json.loads(seen[0]['arguments_json']), {'id': 123})
+
+    def test_read_fallback_never_runs_for_non_tool_or_write_plan(self):
+        cases = [
+            {'action': 'CLARIFY', 'intent': 'complaint.search', 'candidates': ['complaint.search'], 'arguments': {'id': 123}},
+            {'action': 'DENY', 'intent': 'complaint.search', 'candidates': [], 'arguments': {'id': 123}},
+            {'action': 'TOOL', 'intent': 'visitor.create', 'candidates': ['visitor.create'], 'arguments': {}},
+        ]
+        for hint in cases:
+            with self.subTest(hint=hint):
+                token = _PLANNER_HINT.set(hint)
+                try:
+                    self.assertIsNone(_planner_read_fallback())
+                finally:
+                    _PLANNER_HINT.reset(token)
 
     def test_read_fallback_never_marks_turn_as_expected_write(self):
         for command in sorted(_READ_ONLY_INTENTS):
