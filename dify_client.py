@@ -59,6 +59,7 @@ _MULTI_RESOLVE_SPECS = {
     'visitor.create': ('person.search', 'house.search'),
     'order.assign': ('order.search', 'staff.search'),
     'complaint.assign': ('complaint.search', 'complaint_staff.search'),
+    'inspection.create': ('device.search', 'inspection_staff.search'),
 }
 
 _RESOLVER_LABELS = {
@@ -68,6 +69,7 @@ _RESOLVER_LABELS = {
     'staff.search': '维修人员',
     'complaint.search': '投诉记录',
     'complaint_staff.search': '投诉处理人员',
+    'device.search': '设备',
     'inspection_staff.search': '巡检人员',
 }
 
@@ -111,7 +113,6 @@ def _parse_call_command(call):
 
 
 def _normalize_read_call(call):
-    """Force every read capability through lookup, regardless of provider hints."""
     outer = _parse_call_args(call)
     command = outer.get('command')
     if command not in _READ_ONLY_INTENTS or outer.get('operation') == 'lookup':
@@ -148,11 +149,6 @@ def _context_resolver_fallback():
 
 
 def _multi_resolver_fallback(command, resolved=None):
-    """Build the next server-owned lookup for a RESOLVE_MULTI plan.
-
-    Every internal identifier used by the final mutation must come from a
-    scoped lookup result. Provider-supplied IDs are deliberately ignored.
-    """
     hint = _PLANNER_HINT.get() or {}
     if hint.get('entity_status') != 'RESOLVE_MULTI':
         return None
@@ -214,6 +210,28 @@ def _multi_resolver_fallback(command, resolved=None):
                 params['community_id'] = complaint['community_id']
             if complaint.get('building_id') is not None:
                 params['building_id'] = complaint['building_id']
+        else:
+            return None
+    elif intent == 'inspection.create':
+        if command == 'device.search':
+            device_id = values.get('device_id')
+            code = values.get('device_code') or values.get('code')
+            if device_id:
+                params['id'] = device_id
+            elif code:
+                params['code'] = code
+            else:
+                return None
+        elif command == 'inspection_staff.search':
+            assignee_name = values.get('assignee_name')
+            if not assignee_name:
+                return None
+            params['staff_name'] = assignee_name
+            device = resolved.get('device.search') or {}
+            if device.get('community_id') is not None:
+                params['community_id'] = device['community_id']
+            if device.get('building_id') is not None:
+                params['building_id'] = device['building_id']
         else:
             return None
     else:
@@ -296,7 +314,6 @@ def _resolved_write_fallback(query, item):
 
 
 def _multi_resolved_write_fallback(resolved):
-    """Build a mutation exclusively from exact rows selected by all lookups."""
     hint = _PLANNER_HINT.get() or {}
     intent = hint.get('intent')
     values = dict(hint.get('arguments') or {})
@@ -331,6 +348,20 @@ def _multi_resolved_write_fallback(resolved):
             return None
         params = {'id': complaint['id'], 'version': complaint['version'], 'assignee_id': handler['id']}
         return {'operation': 'execute', 'command': 'complaint.assign', 'arguments_json': json.dumps(params, ensure_ascii=False)}
+    if intent == 'inspection.create':
+        device = resolved.get('device.search') or {}
+        inspector = resolved.get('inspection_staff.search') or {}
+        if device.get('id') is None or inspector.get('id') is None:
+            return None
+        if not values.get('due_at') or not values.get('checklist'):
+            return None
+        params = {
+            'device_id': device['id'],
+            'assignee_id': inspector['id'],
+            'due_at': values['due_at'],
+            'checklist': values['checklist'],
+        }
+        return {'operation': 'execute', 'command': 'inspection.create', 'arguments_json': json.dumps(params, ensure_ascii=False)}
     return None
 
 
@@ -349,7 +380,6 @@ def _call_matches_resolved_target(call, item):
 
 
 def _chat_common(self, query, user, conversation_id, tool_callback, system_prompt, stream=False):
-    """Run a bounded tool loop with server-verifiable execution state."""
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
     hint = _PLANNER_HINT.get() or {}
     clarification = hint.get('clarification_text')
