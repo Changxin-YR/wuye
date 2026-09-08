@@ -89,6 +89,29 @@ def _parse_call_command(call):
     return _parse_call_args(call).get('command')
 
 
+def _normalize_read_call(call):
+    """Force every read capability through lookup, regardless of provider hints.
+
+    ``operation`` is model-controlled for native tool calls and can also be
+    produced by older planner fallback code. Backend queries are read-only by
+    definition, so an execute/propose label must never survive to the callback.
+    Malformed calls are left untouched for the existing validator to reject.
+    """
+    outer = _parse_call_args(call)
+    command = outer.get('command')
+    if command not in _READ_ONLY_INTENTS or outer.get('operation') == 'lookup':
+        return call
+    outer = dict(outer)
+    outer['operation'] = 'lookup'
+    safe = dict(call) if isinstance(call, dict) else call
+    if not isinstance(safe, dict):
+        return call
+    function = dict(safe.get('function') or {})
+    function['arguments'] = json.dumps(outer, ensure_ascii=False)
+    safe['function'] = function
+    return safe
+
+
 def _context_resolver_fallback():
     hint = _PLANNER_HINT.get() or {}
     if hint.get('entity_status') != 'RESOLVE_FIRST':
@@ -320,6 +343,8 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             raise _core.DifyUnavailable(f'{self.service_name}返回了无法识别的回答。', 'bad_response')
 
         provider_calls = message.get('tool_calls') or []
+        if allow_tools and provider_calls:
+            provider_calls = [_normalize_read_call(call) for call in provider_calls]
         if provider_calls and not allow_tools:
             if force_final:
                 if not isinstance(provider_calls, list) or len(provider_calls) > 4:
@@ -381,6 +406,8 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                     if isinstance(resolver, dict):
                         calls = [_synthetic_call(resolver, 'planner-resolver')]
                         resolver_fallback_used = True
+        if calls:
+            calls = [_normalize_read_call(call) for call in calls]
         if not provider_calls and calls:
             message = dict(message)
             message['role'] = 'assistant'
