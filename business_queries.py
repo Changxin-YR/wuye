@@ -16,6 +16,7 @@ QUERIES = {
     "unit.search": "property.read",
     "person.search": "person.read",
     "person.properties": "person.read",
+    "staff.search": "order.dispatch",
     "order.search": "order.read",
     "order.pending": "order.read",
     "complaint.search": "complaint.read",
@@ -68,6 +69,11 @@ def _clean_args(command, args):
             if alias in args:
                 args["person_name"] = args.pop(alias)
                 break
+    if command == "staff.search" and "staff_name" not in args:
+        for alias in ("name", "q", "keywords"):
+            if alias in args:
+                args["staff_name"] = args.pop(alias)
+                break
     if command == "person.properties" and "person_id" not in args and "id" in args:
         args["person_id"] = args.pop("id")
     if command.startswith("order.") and "order_no" not in args and "q" in args:
@@ -80,7 +86,7 @@ def _clean_args(command, args):
         args["space_code"] = args.pop("q")
     allowed = {
         "community_id", "building_id", "building_name", "building", "unit_id", "unit", "unit_name",
-        "room_no", "house_id", "id", "person_id", "person_name", "phone", "month", "status", "q",
+        "room_no", "house_id", "id", "person_id", "person_name", "staff_name", "username", "phone", "month", "status", "q",
         "order_no", "plate", "space_code", "code", "name", "device_id", "assignee_id", "bill_id",
         "fee_item_id", "category",
     }
@@ -197,6 +203,22 @@ def query(db, actor, command, args):
         if args.get("phone"):
             q = q.where(Person.phone == args["phone"])
         return _items(db.scalars(q.limit(101)))
+
+    if command == "staff.search":
+        eligible = select(UserRole.user_id).join(
+            RolePermission, RolePermission.role_code == UserRole.role_code
+        ).where(RolePermission.permission == "order.work")
+        q = policy.query(User).where(User.active.is_(True), User.id.in_(eligible))
+        if args.get("id"):
+            q = q.where(User.id == args["id"])
+        if args.get("staff_name"):
+            name = str(args["staff_name"]).strip()
+            q = q.where(or_(User.real_name == name, User.username == name))
+        if args.get("username"):
+            q = q.where(User.username == args["username"])
+        if args.get("phone"):
+            q = q.where(User.phone == args["phone"])
+        return _items(db.scalars(q.order_by(User.id).limit(101)))
 
     if command.startswith("order."):
         q = policy.query(WorkOrder)
