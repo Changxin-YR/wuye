@@ -6,6 +6,7 @@ versions and risk checks are still enforced by the backend gateway and services.
 """
 import re
 import time
+from datetime import datetime, timedelta
 from threading import Lock
 
 try:
@@ -31,6 +32,63 @@ _PENDING_LIMIT = 256
 _PENDING = {}
 _PENDING_LOCK = Lock()
 _CANCEL_RE = re.compile(r'^(?:算了|取消(?:这个|本次)?(?:操作|请求)?|不用了|不做了|先不弄了|结束(?:这个|本次)?操作)[。！!\s]*$')
+_CN_HOUR = {'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'十一':11,'十二':12}
+
+
+def visitor_expected_at(text):
+    """Parse an explicit operator-supplied arrival time into China-local ISO.
+
+    We only infer relative dates when the user says 今天/明天/后天. A bare
+    "下午两点" is intentionally left unresolved because silently choosing a date
+    could register a visitor for the wrong day.
+    """
+    value = str(text or '').strip()
+    explicit = re.search(r'(20\d{2})[-/](\d{1,2})[-/](\d{1,2})[ T]([01]?\d|2[0-3])[:：]([0-5]\d)', value)
+    if explicit:
+        try:
+            dt = datetime(int(explicit.group(1)), int(explicit.group(2)), int(explicit.group(3)), int(explicit.group(4)), int(explicit.group(5)))
+            return dt.isoformat(timespec='minutes')
+        except ValueError:
+            return None
+    day_offset = 0 if '今天' in value else (1 if '明天' in value else (2 if '后天' in value else None))
+    if day_offset is None:
+        return None
+    matched = re.search(r'(上午|早上|中午|下午|晚上)?\s*([0-9]{1,2}|十二|十一|十|[一二两三四五六七八九])\s*[点时](半|\d{1,2}分?)?', value)
+    if not matched:
+        clock = re.search(r'([01]?\d|2[0-3])[:：]([0-5]\d)', value)
+        if not clock:
+            return None
+        hour, minute = int(clock.group(1)), int(clock.group(2))
+    else:
+        token = matched.group(2)
+        hour = int(token) if token.isdigit() else _CN_HOUR.get(token)
+        if hour is None or hour > 23:
+            return None
+        period = matched.group(1) or ''
+        if period in {'下午','晚上'} and hour < 12:
+            hour += 12
+        elif period == '中午' and hour < 11:
+            hour += 12
+        suffix = matched.group(3) or ''
+        minute = 30 if suffix == '半' else int(re.sub(r'分$', '', suffix) or 0)
+        if minute > 59:
+            return None
+    local_today = (datetime.utcnow() + timedelta(hours=8)).date()
+    target = local_today + timedelta(days=day_offset)
+    return datetime(target.year, target.month, target.day, hour, minute).isoformat(timespec='minutes')
+
+
+def visitor_purpose(text, host_name=None):
+    value = str(text or '').strip()
+    explicit = re.search(r'(?:来访目的|目的)(?:是|为|：|:)?\s*([^，,。；;]{1,80})', value)
+    if explicit:
+        return explicit.group(1).strip()
+    keyword = re.search(r'送快递|送货|送餐|看房|维修|保洁|探访|拜访|看望', value)
+    if keyword:
+        return keyword.group(0)
+    if host_name:
+        return '拜访' + str(host_name)
+    return None
 
 
 def _identity_key():
@@ -82,9 +140,6 @@ def clear_pending_plan():
     with _PENDING_LOCK:
         _cleanup_pending()
         _PENDING.pop(key, None)
-        # The first clarification has no conversation id because app.py creates
-        # the conversation after planning.  A later request may therefore need
-        # to clear the one unbound pending plan for this identity as well.
         if key[-1] is not None:
             _PENDING.pop(_unbound_key(), None)
 
@@ -99,9 +154,6 @@ def _get_pending():
         value = _PENDING.get(key)
         if value:
             return dict(value)
-        # Bind the initial, conversation-less clarification to the conversation
-        # id returned by /ai/chat on the first follow-up.  Once bound, other chat
-        # tabs for the same user cannot consume it.
         if key[-1] is not None:
             unbound = _unbound_key()
             value = _PENDING.pop(unbound, None)
@@ -151,9 +203,11 @@ def _looks_like_continuation(text, pending):
         'person': r'手机号|电话|[\u4e00-\u9fff]{2,4}',
         'host_person': r'手机号|电话|[\u4e00-\u9fff]{2,4}',
         'phone': r'1[3-9]\d{9}',
+        'expected_at': r'今天|明天|后天|上午|早上|中午|下午|晚上|\d{1,2}[:：]\d{2}|[点时]',
+        'purpose': r'目的|送快递|送货|送餐|看房|维修|保洁|探访|拜访|看望',
         'notice': r'公告|通知|\d+',
         'complaint': r'投诉|\d+',
-        'visitor': r'访客|来访|客人|\d+',
+        'visitor': r'访客|来访|客人|\d+|[\u4e00-\u9fff]{2,4}',
         'vehicle': r'车牌|车辆|[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5}',
         'space': r'车位|停车位|[A-Za-z]+-\d+',
         'parking_use': r'车位|车牌|[A-Za-z]+-\d+',
@@ -179,8 +233,10 @@ def _slot_keys(slot):
         'repairer': {'repairer_name', 'person_name', 'phone', 'repairer_id'},
         'assignee': {'assignee_id', 'repairer_name', 'person_name', 'phone'},
         'person': {'person_name', 'phone', 'person_id', 'id'},
-        'host_person': {'person_name', 'phone', 'host_person_id'},
+        'host_person': {'person_name', 'host_person_id'},
         'phone': {'phone'},
+        'expected_at': {'expected_at'},
+        'purpose': {'purpose'},
         'notice': {'notice_id', 'id'},
         'complaint': {'complaint_id', 'id'},
         'visitor': {'visitor_id', 'visitor_name', 'id'},
@@ -210,6 +266,13 @@ def _extract_followup(intent, text, missing=None):
     missing = set(missing or ())
     if intent in {'notice.save', 'notice.batch_publish'}:
         values.update(_notice_entities(text))
+    if intent == 'visitor.create':
+        expected = visitor_expected_at(text)
+        if expected:
+            values['expected_at'] = expected
+        purpose = visitor_purpose(text, values.get('person_name'))
+        if purpose:
+            values['purpose'] = purpose
     for label, key in (
         ('投诉', 'complaint_id'), ('访客', 'visitor_id'), ('巡检', 'inspection_id'),
         ('收款', 'payment_id'), ('账单', 'bill_id'),
@@ -233,6 +296,14 @@ def _extract_followup(intent, text, missing=None):
             values['person_name'] = name
     if 'community_id' in missing and re.fullmatch(r'\s*[\u4e00-\u9fffA-Za-z0-9]{1,20}(?:小区|花园|社区|园区)\s*', text):
         values['community_name'] = text.strip()
+    if 'purpose' in missing and not values.get('purpose'):
+        purpose = visitor_purpose(text)
+        if purpose:
+            values['purpose'] = purpose
+    if 'expected_at' in missing and not values.get('expected_at'):
+        expected = visitor_expected_at(text)
+        if expected:
+            values['expected_at'] = expected
     if 'new_request_details' in missing and text.strip():
         values['request_details'] = text.strip()
         values.setdefault('content', text.strip())
@@ -248,15 +319,15 @@ def _merge_pending(pending, text, context):
     allowed = set()
     for slot in missing:
         allowed.update(_slot_keys(slot))
-    # Stable identifiers can safely be carried forward; backend scope/version
-    # checks still decide whether they are usable.
     allowed.update({
         'community_name', 'building_name', 'unit', 'room_no', 'order_no', 'phone',
-        'plate', 'space_code', 'device_code', 'code', 'request_details',
+        'plate', 'space_code', 'device_code', 'code', 'request_details', 'expected_at', 'purpose',
     })
     for key, value in extracted.items():
         if key in allowed and value not in (None, ''):
             merged[key] = value
+    if intent == 'visitor.create' and not merged.get('purpose') and merged.get('person_name'):
+        merged['purpose'] = visitor_purpose('', merged.get('person_name'))
 
     writable = context.get('writable_communities')
     if 'community_id' in missing and not merged.get('community_id') and merged.get('community_name') and isinstance(writable, list):
@@ -267,7 +338,7 @@ def _merge_pending(pending, text, context):
     def satisfied(slot):
         if slot == 'community_id':
             return bool(merged.get('community_id'))
-        if slot in {'notice_title', 'notice_content', 'phone', 'version', 'id'}:
+        if slot in {'notice_title', 'notice_content', 'phone', 'expected_at', 'purpose', 'version', 'id'}:
             return merged.get(slot) not in (None, '')
         if slot == 'building':
             return bool(merged.get('building_id') or merged.get('building_name'))
@@ -282,7 +353,7 @@ def _merge_pending(pending, text, context):
         if slot == 'person':
             return bool(context.get('resolved_person') or merged.get('person_name') or merged.get('phone') or merged.get('person_id') or merged.get('id'))
         if slot == 'host_person':
-            return bool(context.get('resolved_person') or merged.get('host_person_id') or merged.get('person_name') or merged.get('phone'))
+            return bool(context.get('resolved_person') or merged.get('host_person_id') or merged.get('person_name'))
         if slot == 'notice':
             return bool(context.get('resolved_notice') or merged.get('notice_id') or merged.get('id'))
         if slot == 'complaint':
@@ -344,8 +415,6 @@ def plan_request(message, authorized_commands, context=None):
     detected = _detect_intent(text)
     if pending and _looks_like_continuation(text, pending):
         result = _merge_pending(pending, text, context)
-        # Never revive an intent that is no longer represented by an authorized
-        # candidate. Backend authorization remains authoritative as a second gate.
         authorized = set(authorized_commands or ())
         candidates = [item for item in result.get('candidates', []) if item in authorized]
         if result.get('intent') in authorized and result.get('intent') not in candidates:
