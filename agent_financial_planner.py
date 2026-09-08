@@ -27,6 +27,8 @@ def parse_period(text):
     explicit = re.search(r'(20\d{2})[-/年](0?[1-9]|1[0-2])(?:月)?', value)
     if explicit:
         return f"{int(explicit.group(1)):04d}-{int(explicit.group(2)):02d}"
+    if re.search(r'上个?月', value):
+        return _month_with_offset(-1)
     if re.search(r'下个?月', value):
         return _month_with_offset(1)
     if re.search(r'本月|这个月|当月', value):
@@ -83,10 +85,22 @@ def parse_financial_reason(text, intent, followup=False):
     suffix = re.search(action + r'[^，,。；;]{0,50}[，,；;]\s*([^。；;]{2,300})', value)
     if suffix:
         return suffix.group(1).strip()
-    # For a pending reason question, a short plain reply such as “重复入账” or
-    # “住户已搬走” is itself the reason. Do not treat another command as a reason.
     if followup and 2 <= len(value) <= 300 and not re.search(r'作废|冲销|冲正|撤回|确认|执行|直接', value):
         return value
+    return None
+
+
+def parse_unpaid_person_name(text):
+    """Extract an explicit resident/person name from unpaid-billing questions."""
+    value = str(text or '').strip()
+    patterns = (
+        r'(?:查|查询|看看|看下|查一下)\s*([\u4e00-\u9fff]{2,4})(?=(?:有没有|是否|有无|还有没有).{0,8}(?:欠费|未缴))',
+        r'([\u4e00-\u9fff]{2,4})(?=(?:有没有|是否|有无|还有没有).{0,8}(?:欠费|未缴))',
+    )
+    for pattern in patterns:
+        matched = re.search(pattern, value)
+        if matched:
+            return matched.group(1)
     return None
 
 
@@ -106,20 +120,12 @@ def _read_result(intent, authorized, values):
 
 
 def repair_read_plan(text, result, authorized_commands):
-    """Repair common read phrases without changing RBAC/DataScope semantics.
-
-    The older detector intentionally focuses on mutation workflows and has a few
-    broad patterns (notably ``收费项目``) that can classify a read request as a
-    write. Explicit operator read language wins over those broad patterns, but
-    security-boundary denials and explicit mutation language are never relaxed.
-    """
+    """Repair common read phrases without changing RBAC/DataScope semantics."""
     value = str(text or '').strip()
     if not value or not _READ_WORDS.search(value):
         return result
     if result.get('intent') == 'security_boundary' or result.get('action') == 'DENY':
         return result
-    # Never reinterpret an explicitly requested mutation as a read merely because
-    # the sentence also contains “查看/状态” in explanatory text.
     if re.search(r'新增|新建|创建|登记|修改|更新|作废|冲销|冲正|撤回|发布|删除|归档|分派|派给|分给', value):
         return result
 
@@ -225,11 +231,22 @@ def repair_financial_plan(text, result, authorized_commands):
     """Turn financial writes into explicit-slot, server-resolved plans."""
     result = repair_read_plan(text, result, authorized_commands)
     intent = result.get('intent')
+
+    if intent == 'billing.unpaid':
+        values = dict(result.get('arguments') or {})
+        person_name = parse_unpaid_person_name(text)
+        period = parse_period(text)
+        if person_name:
+            values['person_name'] = person_name
+        if period:
+            values['month'] = period
+        repaired = dict(result)
+        repaired['arguments'] = values
+        return repaired
+
     financial_intents = {'bill.create', 'bill.batch', 'bill.void', 'payment.record', 'payment.reverse'}
     if intent not in financial_intents:
         return result
-    # Load the direct-provider extensions only on financial turns. Importing the
-    # module mutates only the resolver tables/functions used by dify_client.
     import dify_financial_patch  # noqa: F401
 
     values = dict(result.get('arguments') or {})
@@ -254,10 +271,6 @@ def repair_financial_plan(text, result, authorized_commands):
     if reason:
         values['reason'] = reason
 
-    # A common spoken form is “给A栋101生成物业费账单”. The legacy detector sees
-    # “栋 ... 生成” and can classify it as batch billing before it reaches the
-    # single-house pattern. If a concrete room is present and the user did not
-    # explicitly ask for a batch/whole-building operation, this is one bill.
     batch_words = re.search(r'批量|整栋|全栋|整幢|全楼|整楼|所有房|全部房|这一栋全部|这栋全部', str(text or ''))
     if (
         intent == 'bill.batch'
@@ -268,7 +281,6 @@ def repair_financial_plan(text, result, authorized_commands):
     ):
         intent = 'bill.create'
 
-    # Never accept model/internal identifiers for fee/building/house resolution.
     for key in ('fee_item_id', 'building_id', 'house_id', 'version'):
         values.pop(key, None)
 
@@ -309,8 +321,6 @@ def repair_financial_plan(text, result, authorized_commands):
         return _result(intent, 'CONFIRM', required, values, status='RESOLVE_MULTI')
 
     if intent == 'bill.void':
-        # A visible bill number is enough to let the backend reload the current
-        # scoped row/version; the LLM never needs to resolve or supply DB ids.
         missing = []
         if not values.get('bill_id'):
             missing.append('bill')
@@ -324,8 +334,6 @@ def repair_financial_plan(text, result, authorized_commands):
         return _result(intent, 'CONFIRM', candidates, values, status='SERVER_OWNED')
 
     if intent == 'payment.record':
-        # The user-visible bill number is explicit business input. The server
-        # reloads it through Policy and takes its current version.
         missing = []
         if not values.get('bill_id'):
             missing.append('bill')
@@ -342,9 +350,6 @@ def repair_financial_plan(text, result, authorized_commands):
             return _result(intent, 'DENY', candidates, values, status='FORBIDDEN')
         return _result(intent, 'CONFIRM', candidates, values, status='SERVER_OWNED')
 
-    # payment.reverse supports either an explicit receipt record or the user's
-    # explicit “上一笔/最近一笔” reference. The latter must remain a server-owned
-    # read resolver; it is never replaced with a model-provided payment id.
     explicit_payment = values.get('payment_id') or values.get('id')
     latest = values.get('_resolve_strategy') == 'latest'
     missing = []
