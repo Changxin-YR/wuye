@@ -38,7 +38,7 @@ _RESOLVER_ARGUMENTS = {
     'visitor.search': {'community_id', 'building_id', 'house_id', 'status', 'phone', 'name', 'id'},
     'vehicle.search': {'community_id', 'building_id', 'house_id', 'person_id', 'status', 'plate', 'id'},
     'parking.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
-    'parking_use.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
+    'parking_use.search': {'community_id', 'building_id', 'status', 'space_code', 'plate'},
     'device.search': {'community_id', 'building_id', 'status', 'category', 'code', 'name', 'id'},
     'inspection.search': {'community_id', 'building_id', 'device_id', 'assignee_id', 'status', 'id'},
     'fee.search': {'community_id', 'fee_item_id', 'name', 'id'},
@@ -163,7 +163,11 @@ def _normalize_read_call(call):
     owned = _planner_owned_read_params(command)
     if owned is not None:
         outer['arguments_json'] = json.dumps(owned, ensure_ascii=False)
-    if command == 'parking_use.search':
+    # An explicit pure read such as “查看车位使用记录12” may keep the
+    # planner-owned relation id above. Resolver flows for parking.release are
+    # different: the provider/model must never inject a ParkingUse internal id,
+    # so non-owned calls are restricted to user-visible business fields.
+    if command == 'parking_use.search' and owned is None:
         try:
             params = json.loads(outer.get('arguments_json') or '{}')
         except (TypeError, ValueError, json.JSONDecodeError):
