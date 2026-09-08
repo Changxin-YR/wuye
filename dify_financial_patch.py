@@ -2,11 +2,16 @@
 
 Imported only for financial planner turns. It extends the already-tested
 resolver loop without replacing it: bill creation resolves user-visible
-business objects first and only then builds a confirmation proposal.
+business objects first and only then builds a confirmation proposal. Payment
+recording is normalized again at the backend gateway so provider-supplied
+bill/version/amount/channel/reference values can never retarget the proposal.
 """
 import json
 
+import agent_tools as _tools
 import dify_client as _client
+from models import Bill
+from permissions import Policy
 
 if not getattr(_client, '_FINANCIAL_RESOLVER_PATCHED', False):
     _client._FINANCIAL_RESOLVER_PATCHED = True
@@ -21,6 +26,7 @@ if not getattr(_client, '_FINANCIAL_RESOLVER_PATCHED', False):
 
     _base_multi_resolver = _client._multi_resolver_fallback
     _base_multi_write = _client._multi_resolved_write_fallback
+    _base_normalize = _tools.normalize
 
     def _financial_multi_resolver(command, resolved=None):
         hint = _client._PLANNER_HINT.get() or {}
@@ -94,6 +100,37 @@ if not getattr(_client, '_FINANCIAL_RESOLVER_PATCHED', False):
             return {'operation': 'propose', 'command': 'bill.batch', 'arguments_json': json.dumps(params, ensure_ascii=False)}
         return None
 
+    def _server_owned_payment_params(actor, command, params):
+        """Replace all provider payment fields with the deterministic planner facts.
+
+        The user-visible bill number comes from the natural-language request.
+        The current row version is loaded from the actor's scoped Policy at the
+        gateway immediately before proposal validation. This protects both
+        provider-generated calls and the older app.py fallback builder.
+        """
+        if command != 'payment.record':
+            return params
+        hint = _client._PLANNER_HINT.get() or {}
+        if str(hint.get('action') or '').upper() != 'CONFIRM' or hint.get('intent') != 'payment.record':
+            return params
+        values = dict(hint.get('arguments') or {})
+        required = ('bill_id', 'amount', 'channel', 'reference')
+        if any(values.get(key) in (None, '') for key in required):
+            return params
+        db = _tools.object_session(actor)
+        if db is None:
+            return params
+        bill = Policy(db, actor).get(Bill, int(values['bill_id']), True)
+        return {
+            'bill_id': bill.id,
+            'version': bill.version,
+            # Agent normalize accepts scalar strings/ints; a canonical string also
+            # avoids binary-float surprises before PropertyService Decimal parsing.
+            'amount': str(values['amount']),
+            'channel': str(values['channel']),
+            'reference': str(values['reference']),
+        }
+
     def multi_resolver_fallback(command, resolved=None):
         financial = _financial_multi_resolver(command, resolved)
         if financial is not None:
@@ -106,5 +143,10 @@ if not getattr(_client, '_FINANCIAL_RESOLVER_PATCHED', False):
             return financial
         return _base_multi_write(resolved)
 
+    def normalize(actor, command, params):
+        params = _server_owned_payment_params(actor, command, params)
+        return _base_normalize(actor, command, params)
+
     _client._multi_resolver_fallback = multi_resolver_fallback
     _client._multi_resolved_write_fallback = multi_resolved_write_fallback
+    _tools.normalize = normalize
