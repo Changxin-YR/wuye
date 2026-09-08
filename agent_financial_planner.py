@@ -94,8 +94,8 @@ def parse_unpaid_person_name(text):
     """Extract an explicit resident/person name from unpaid-billing questions."""
     value = str(text or '').strip()
     patterns = (
-        r'(?:查|查询|看看|看下|查一下)\s*([\u4e00-\u9fff]{2,4})(?=(?:有没有|是否|有无|还有没有).{0,8}(?:欠费|未缴))',
-        r'([\u4e00-\u9fff]{2,4})(?=(?:有没有|是否|有无|还有没有).{0,8}(?:欠费|未缴))',
+        r'(?:查询|查一下|查下|看看|看下|查)\s*([\u4e00-\u9fff]{2,4})(?=(?:有没有|是否|有无|还有没有).{0,8}(?:欠费|未缴|未交))',
+        r'([\u4e00-\u9fff]{2,4})(?=(?:有没有|是否|有无|还有没有).{0,8}(?:欠费|未缴|未交))',
     )
     for pattern in patterns:
         matched = re.search(pattern, value)
@@ -230,7 +230,18 @@ def _result(intent, action, candidates, values, missing=None, status='RESOLVED')
 def repair_financial_plan(text, result, authorized_commands):
     """Turn financial writes into explicit-slot, server-resolved plans."""
     result = repair_read_plan(text, result, authorized_commands)
+    authorized = set(authorized_commands or ())
     intent = result.get('intent')
+
+    unpaid_question = bool(re.search(
+        r'(?:有没有|是否|有无|还有没有).{0,12}(?:欠费|未缴|未交)|'
+        r'(?:欠费|未缴|未交).{0,8}(?:多少|吗|情况)|'
+        r'(?:本月|这个月|当月).{0,12}物业费.{0,8}(?:没收|未收)',
+        str(text or ''),
+    ))
+    if intent == 'unknown' and unpaid_question and 'billing.unpaid' in authorized:
+        result = _read_result('billing.unpaid', authorized, dict(result.get('arguments') or {}))
+        intent = 'billing.unpaid'
 
     if intent == 'billing.unpaid':
         values = dict(result.get('arguments') or {})
@@ -250,7 +261,6 @@ def repair_financial_plan(text, result, authorized_commands):
     import dify_financial_patch  # noqa: F401
 
     values = dict(result.get('arguments') or {})
-    authorized = set(authorized_commands or ())
 
     period = parse_period(text)
     due_date = parse_due_date(text)
