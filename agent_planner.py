@@ -1,11 +1,20 @@
 """Semantic compatibility layer around the stateful deterministic planner.
 
 The state machine and frozen planner remain in ``agent_planner_state`` and
-``agent_planner_core``. This layer repairs broad Chinese business phrases and
-turns safe contextual references ("刚才那个", "上一笔") into scoped resolver
-workflows. It never grants permissions or bypasses backend Policy/DataScope.
+``agent_planner_core``. This layer repairs broad Chinese business phrases,
+turns safe contextual references into scoped resolver workflows, and presents
+missing slots as concise operator-style questions. It never grants permissions
+or bypasses backend Policy/DataScope.
 """
 import re
+
+try:
+    from flask import current_app, has_request_context, request
+except Exception:  # pragma: no cover
+    current_app = None
+    request = None
+    def has_request_context():
+        return False
 
 from agent_planner_state import *
 from agent_planner_state import clear_pending_plan, plan_request as _state_plan_request
@@ -144,8 +153,6 @@ def _smooth_context_resolution(text, result, authorized_commands):
     elif intent == 'device.archive' and '报废' in text:
         arguments.setdefault('status', 'retired')
     if intent == 'payment.reverse' and re.search(r'上一笔|最近一笔', text):
-        # Internal planner-only hint. It is never sent to business_queries and
-        # only means "select the first row from the server-sorted payment lookup".
         arguments['_resolve_strategy'] = 'latest'
     action = 'CONFIRM' if intent in CONFIRM_INTENTS else 'TOOL'
     clear_pending_plan()
@@ -157,6 +164,86 @@ def _smooth_context_resolution(text, result, authorized_commands):
         'entity_status': 'RESOLVE_FIRST',
         'arguments': arguments,
     }
+
+
+def _clarification_text(result):
+    """Ask for the first genuinely missing business fact, never an ORM detail."""
+    action = result.get('action')
+    intent = result.get('intent') or ''
+    missing = list(result.get('missing_fields') or [])
+    if action == 'DISAMBIGUATE':
+        if intent.startswith('person.') or 'person' in missing:
+            return '我找到了多位可能的人员。请补一个能区分的信息，例如联系电话。'
+        if intent.startswith('order.'):
+            return '我找到了多张可能的工单。请告诉我工单号，或补充房号/报修内容来确认是哪一张。'
+        return '我找到了多个匹配对象。请补充一个能区分它们的信息，例如姓名、联系电话、业务编号或房号。'
+    slot = missing[0] if missing else None
+    if slot == 'community_id':
+        return '这项操作要在哪个小区办理？直接告诉我小区名称即可。'
+    if slot == 'building':
+        return '具体是哪一栋？直接说“3栋”或“A栋”即可。'
+    if slot in {'house', 'unit'}:
+        return '具体是哪套房？请告诉我楼栋和房号；如果同栋有多个单元，再补充单元。'
+    if slot == 'order':
+        return '你指哪张工单？可以直接说工单号；如果就是刚才那张，也可以说“刚才那张”。'
+    if slot in {'repairer', 'assignee'}:
+        return '要交给哪位工作人员处理？直接说姓名即可；同名时我再请你补充区分信息。'
+    if slot == 'person':
+        return '你指哪位人员？直接说姓名即可；同名时可以再补联系电话。'
+    if slot == 'host_person':
+        return '这位访客要找哪位住户？直接告诉我住户姓名即可。'
+    if slot == 'phone':
+        return '还缺一个联系电话，请直接把手机号或联系电话发给我。'
+    if slot == 'notice_title':
+        return '这条公告的标题写什么？'
+    if slot == 'notice_content':
+        return '这条公告具体要通知什么内容？'
+    if slot == 'notice':
+        return '你要操作哪条公告？可以说公告标题，或说“刚才那条”。'
+    if slot == 'complaint':
+        return '你指哪条投诉？可以说投诉内容/住户，或说“刚才那条”。'
+    if slot == 'visitor':
+        return '你指哪位访客？可以说访客姓名，或说“刚才登记的那位”。'
+    if slot == 'vehicle':
+        return '你指哪辆车？直接告诉我车牌号即可。'
+    if slot in {'space', 'parking_use'}:
+        return '你指哪个车位或哪条停车关系？直接说车位编号或车牌即可。'
+    if slot == 'device':
+        return '你指哪台设备？直接告诉我设备编号或名称即可。'
+    if slot == 'inspection':
+        return '你指哪条巡检任务？可以说设备编号或巡检任务编号。'
+    if slot == 'payment':
+        return '要处理哪笔收款？可以说“上一笔”，也可以告诉我对应账单或收款记录。'
+    if slot == 'bill':
+        return '你指哪张账单？可以告诉我账单编号、房号或账期。'
+    if slot == 'fee':
+        return '要使用哪个收费项目？直接告诉我收费项目名称即可。'
+    if slot == 'new_request_details':
+        return '这次新的报修具体是什么问题？告诉我位置和故障情况即可，我不会重复提交上一条。'
+    if slot in {'id', 'version', 'disambiguation'}:
+        return '请再说明一下你要操作的具体业务对象，例如名称、编号、房号或“刚才那条”；内部记录 ID 和版本号不用你提供。'
+    return '我还缺一项办理所需的信息。请补充你要操作的具体对象或业务条件，我会接着刚才的任务继续办理。'
+
+
+def _use_local_clarification(result):
+    """Route direct-model clarifications through a deterministic local reply.
+
+    The stateful planner has already stored the pending plan before this wrapper
+    runs, so changing the presentation action to ANSWER does not lose the task.
+    Dify keeps its legacy path untouched.
+    """
+    if result.get('action') not in {'CLARIFY', 'DISAMBIGUATE'}:
+        return result
+    if not has_request_context() or request is None or request.path != '/ai/chat':
+        return result
+    provider = str(current_app.config.get('AI_PROVIDER', 'bailian')).lower() if current_app is not None else 'bailian'
+    if provider == 'dify':
+        return result
+    shown = dict(result)
+    shown['pending_action'] = result.get('action')
+    shown['action'] = 'ANSWER'
+    shown['clarification_text'] = _clarification_text(result)
+    return shown
 
 
 def plan_request(message, authorized_commands, context=None):
@@ -171,4 +258,5 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_device_code(result)
     result = _repair_order_cancel(text, result, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
+    result = _use_local_clarification(result)
     return result
