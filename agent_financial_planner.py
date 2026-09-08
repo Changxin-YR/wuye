@@ -111,6 +111,10 @@ def repair_financial_plan(text, result, authorized_commands):
     intent = result.get('intent')
     if intent not in {'bill.create', 'bill.batch', 'payment.record'}:
         return result
+    # Load the direct-provider extensions only on financial turns. Importing the
+    # module mutates only the resolver tables/functions used by dify_client.
+    import dify_financial_patch  # noqa: F401
+
     values = dict(result.get('arguments') or {})
     authorized = set(authorized_commands or ())
 
