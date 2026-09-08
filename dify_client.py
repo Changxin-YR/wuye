@@ -51,9 +51,6 @@ _RESOLVED_SINGLE_TARGET_INTENTS = {
     'payment.reverse', 'bill.void',
 }
 
-# Multi-entity writes are intentionally explicit. Each resolver is read-only,
-# scoped by the current actor, and must return exactly one row before the final
-# write can be synthesized. More flows can reuse this structure later.
 _MULTI_RESOLVE_SPECS = {
     'visitor.create': ('person.search', 'house.search'),
 }
@@ -93,7 +90,6 @@ def _parse_call_command(call):
 
 
 def _context_resolver_fallback():
-    """Build one read-only resolver call for a RESOLVE_FIRST plan."""
     hint = _PLANNER_HINT.get() or {}
     if hint.get('entity_status') != 'RESOLVE_FIRST':
         return None
@@ -110,11 +106,7 @@ def _context_resolver_fallback():
         params['name'] = values['visitor_name']
     if command == 'parking.search' and 'space_code' not in params and values.get('space_code'):
         params['space_code'] = values['space_code']
-    return {
-        'operation': 'lookup',
-        'command': command,
-        'arguments_json': json.dumps(params, ensure_ascii=False),
-    }
+    return {'operation': 'lookup', 'command': command, 'arguments_json': json.dumps(params, ensure_ascii=False)}
 
 
 def _multi_resolver_fallback(command):
@@ -150,26 +142,18 @@ def _multi_resolver_fallback(command):
                 return None
     else:
         return None
-    return {
-        'operation': 'lookup',
-        'command': command,
-        'arguments_json': json.dumps(params, ensure_ascii=False),
-    }
+    return {'operation': 'lookup', 'command': command, 'arguments_json': json.dumps(params, ensure_ascii=False)}
 
 
 def _synthetic_call(args, call_id='planner-fallback'):
     return {
         'id': call_id,
         'type': 'function',
-        'function': {
-            'name': 'property_agent_tool',
-            'arguments': json.dumps(args, ensure_ascii=False),
-        },
+        'function': {'name': 'property_agent_tool', 'arguments': json.dumps(args, ensure_ascii=False)},
     }
 
 
 def _resolver_items(result):
-    """Extract model-safe resolver items from either raw or structured envelopes."""
     if not isinstance(result, dict):
         return None
     data = result.get('data')
@@ -185,7 +169,6 @@ def _resolver_items(result):
 
 
 def _narrow_resolver_result(result, item):
-    """Show the model only the server-selected row."""
     envelope = dict(result) if isinstance(result, dict) else {}
     if isinstance(envelope.get('items'), list):
         envelope['items'] = [item]
@@ -213,7 +196,6 @@ def _resolver_terminal_result(result, code, message):
 
 
 def _resolved_write_fallback(query, item):
-    """Build a mutation from the exact row selected by a single resolver."""
     hint = _PLANNER_HINT.get() or {}
     intent = hint.get('intent')
     if intent not in _RESOLVED_SINGLE_TARGET_INTENTS or not isinstance(item, dict):
@@ -251,22 +233,17 @@ def _multi_resolved_write_fallback(resolved):
     if any(values.get(key) in (None, '') for key in required):
         return None
     params = {
-        'house_id': person.get('_never_use_person_as_house', house['id']),
+        'house_id': house['id'],
         'host_person_id': person['id'],
         'name': values['visitor_name'],
         'phone': values['phone'],
         'purpose': values['purpose'],
         'expected_at': values['expected_at'],
     }
-    return {
-        'operation': 'execute',
-        'command': 'visitor.create',
-        'arguments_json': json.dumps(params, ensure_ascii=False),
-    }
+    return {'operation': 'execute', 'command': 'visitor.create', 'arguments_json': json.dumps(params, ensure_ascii=False)}
 
 
 def _call_matches_resolved_target(call, item):
-    """Reject a provider mutation that changes the row chosen by the resolver."""
     if not isinstance(item, dict) or item.get('id') is None:
         return False
     outer = _parse_call_args(call)
@@ -353,11 +330,7 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                 code = 'ALREADY_EXECUTED' if executed or completed_commands else 'NO_PROGRESS'
                 text = '业务操作已经处理，不会重复执行，请直接给出最终结果。' if code == 'ALREADY_EXECUTED' else '工具调用没有新进展，请直接给出最终结果。'
                 for call in provider_calls:
-                    messages.append({
-                        'role': 'tool',
-                        'tool_call_id': str(call.get('id', '')),
-                        'content': json.dumps({'ok': True, 'code': code, 'message': text, 'terminal': True}, ensure_ascii=False),
-                    })
+                    messages.append({'role': 'tool', 'tool_call_id': str(call.get('id', '')), 'content': json.dumps({'ok': True, 'code': code, 'message': text, 'terminal': True}, ensure_ascii=False)})
                 continue
             message = dict(message)
             message.pop('tool_calls', None)
@@ -365,14 +338,9 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             provider_calls = []
 
         if allow_tools and resolve_multi:
-            # Multi-object writes are fully server-owned. Model tool calls are
-            # never trusted for target selection, even after one resolver passes.
             provider_calls = []
         elif allow_tools and resolve_first and not resolver_ready and provider_calls:
-            allowed_resolvers = {
-                item for item in hint.get('candidates', ())
-                if item in _READ_ONLY_INTENTS
-            }
+            allowed_resolvers = {item for item in hint.get('candidates', ()) if item in _READ_ONLY_INTENTS}
             provider_calls = [call for call in provider_calls if _parse_call_command(call) in allowed_resolvers]
         elif allow_tools and resolve_first and resolver_ready and resolved_item and provider_calls:
             filtered = []
@@ -444,17 +412,11 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                                             multi_index += 1
                                     elif len(items) == 0:
                                         label = '住户' if command == 'person.search' else '房屋'
-                                        result = _resolver_terminal_result(
-                                            result, 'RESOURCE_NOT_FOUND',
-                                            f'在当前权限范围内没有找到对应{label}，请核对业务信息后再继续。',
-                                        )
+                                        result = _resolver_terminal_result(result, 'RESOURCE_NOT_FOUND', f'在当前权限范围内没有找到对应{label}，请核对业务信息后再继续。')
                                         force_final = True
                                     else:
                                         label = '住户' if command == 'person.search' else '房屋'
-                                        result = _resolver_terminal_result(
-                                            result, 'AMBIGUOUS_ENTITY',
-                                            f'找到多个可能的{label}，请补充更多信息确认具体对象后再继续。',
-                                        )
+                                        result = _resolver_terminal_result(result, 'AMBIGUOUS_ENTITY', f'找到多个可能的{label}，请补充更多信息确认具体对象后再继续。')
                                         force_final = True
                             elif resolve_first and command in _READ_ONLY_INTENTS:
                                 items = _resolver_items(result)
@@ -467,16 +429,10 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                                         resolved_item = items[0]
                                         resolver_ready = True
                                     elif len(items) == 0:
-                                        result = _resolver_terminal_result(
-                                            result, 'RESOURCE_NOT_FOUND',
-                                            '在当前权限范围内没有找到可继续操作的对象，请确认业务对象后再试。',
-                                        )
+                                        result = _resolver_terminal_result(result, 'RESOURCE_NOT_FOUND', '在当前权限范围内没有找到可继续操作的对象，请确认业务对象后再试。')
                                         force_final = True
                                     else:
-                                        result = _resolver_terminal_result(
-                                            result, 'AMBIGUOUS_ENTITY',
-                                            '找到多个可能的业务对象，请根据返回的候选信息确认具体对象后再继续。',
-                                        )
+                                        result = _resolver_terminal_result(result, 'AMBIGUOUS_ENTITY', '找到多个可能的业务对象，请根据返回的候选信息确认具体对象后再继续。')
                                         force_final = True
                         if operation == 'execute' and result.get('ok') is not False and result.get('terminal'):
                             executed = True
@@ -497,19 +453,12 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                             force_final = True
                         elif result.get('terminal') and operation in {'execute', 'propose'}:
                             force_final = True
-                        if result.get('error') or result.get('code') in {
-                            'MISSING_PARAMETER', 'AMBIGUOUS_ENTITY', 'PERMISSION_DENIED', 'DATA_SCOPE_DENIED',
-                            'RESOURCE_NOT_FOUND', 'BUSINESS_CONFLICT', 'VALIDATION_ERROR', 'SYSTEM_ERROR', 'PLANNER_BLOCKED',
-                        }:
+                        if result.get('error') or result.get('code') in {'MISSING_PARAMETER', 'AMBIGUOUS_ENTITY', 'PERMISSION_DENIED', 'DATA_SCOPE_DENIED', 'RESOURCE_NOT_FOUND', 'BUSINESS_CONFLICT', 'VALIDATION_ERROR', 'SYSTEM_ERROR', 'PLANNER_BLOCKED'}:
                             force_final = True
                 except (KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError):
                     result = {'ok': False, 'code': 'VALIDATION_ERROR', 'message': '工具调用参数无效', 'terminal': True}
                     force_final = True
-                messages.append({
-                    'role': 'tool',
-                    'tool_call_id': str(call.get('id', '')),
-                    'content': json.dumps(result, ensure_ascii=False, default=str),
-                })
+                messages.append({'role': 'tool', 'tool_call_id': str(call.get('id', '')), 'content': json.dumps(result, ensure_ascii=False, default=str)})
             continue
 
         answer = _core._safe_final_answer(message.get('content'), executed=executed, pending=pending)
