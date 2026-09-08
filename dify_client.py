@@ -1,6 +1,6 @@
 """Compatibility and safety wrapper for direct model providers.
 
-The stable provider implementation lives in :mod:`dify_client_core`.  This
+The stable provider implementation lives in :mod:`dify_client_core`. This
 wrapper tightens final-answer semantics and repeated-tool termination without
 copying authorization logic out of the backend gateway.
 """
@@ -46,13 +46,11 @@ def _expected_write():
 
 
 def _chat_common(self, query, user, conversation_id, tool_callback, system_prompt, stream=False):
-    """Run a bounded tool loop and turn repeated post-terminal calls into feedback.
+    """Run a bounded tool loop with server-verifiable execution state.
 
-    Once a write succeeds, tools are removed from subsequent provider payloads.
-    If a provider nevertheless repeats a Tool Call, it is never executed again;
-    a synthetic terminal tool result is appended and one final text round is
-    requested.  Lookup no-progress behaves the same way after two identical
-    results.
+    Tool exposure follows the deterministic planner. A lookup is not considered a
+    write, a planner intention is not considered a lookup, and a provider cannot
+    claim completion unless the backend tool path really executed/proposed it.
     """
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
     seen_tool_calls = set()
@@ -63,6 +61,7 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
     planner_fallback_used = False
     pending = False
     executed = False
+    lookup_performed = False
     tools = self._tool_definition()
     for _ in range(6):
         payload = {'model': self.model, 'messages': messages, 'stream': stream}
@@ -86,8 +85,6 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
 
         provider_calls = message.get('tool_calls') or []
         if provider_calls and not allow_tools:
-            # No callback is invoked here. This is either a provider ignoring the
-            # final-text round or a hallucinated tool call in an ANSWER plan.
             if force_final:
                 if not isinstance(provider_calls, list) or len(provider_calls) > 4:
                     raise _core.DifyUnavailable(f'{self.service_name}返回的工具调用过多。', 'bad_response')
@@ -107,6 +104,20 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             provider_calls = []
 
         calls = _core._planner_calls(message, provider_calls, force_final, not planner_fallback_used) if allow_tools else []
+        # Keep the deterministic fallback protocol explicit: if the provider
+        # returns prose instead of a required Tool Call, attach the synthetic call
+        # to the assistant message before appending its tool result.
+        if allow_tools and not provider_calls and not calls and not planner_fallback_used:
+            fallback = (_PLANNER_HINT.get() or {}).get('tool_call')
+            if isinstance(fallback, dict):
+                calls = [{
+                    'id': 'planner-fallback',
+                    'type': 'function',
+                    'function': {
+                        'name': 'property_agent_tool',
+                        'arguments': json.dumps(fallback, ensure_ascii=False),
+                    },
+                }]
         if not provider_calls and calls:
             planner_fallback_used = True
             message = dict(message)
@@ -121,9 +132,12 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                     args, result = self._run_tool_call(call, tool_callback, seen_tool_calls, completed_commands)
                     if isinstance(result, dict):
                         command = args.get('command')
-                        if args.get('operation') == 'execute' and result.get('ok') is not False and result.get('terminal'):
+                        operation = args.get('operation')
+                        if operation == 'lookup' and result.get('ok') is not False:
+                            lookup_performed = True
+                        if operation == 'execute' and result.get('ok') is not False and result.get('terminal'):
                             executed = True
-                        if args.get('operation') == 'propose' and result.get('code') == 'CONFIRMATION_REQUIRED':
+                        if operation == 'propose' and result.get('code') == 'CONFIRMATION_REQUIRED':
                             pending = True
                         progress = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
                         if progress == previous_progress:
@@ -138,7 +152,7 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                             force_final = True
                         elif result.get('code') == 'ALREADY_EXECUTED':
                             force_final = True
-                        elif result.get('terminal') and args.get('operation') in {'execute', 'propose'}:
+                        elif result.get('terminal') and operation in {'execute', 'propose'}:
                             force_final = True
                         if result.get('error') or result.get('code') in {
                             'MISSING_PARAMETER', 'AMBIGUOUS_ENTITY', 'PERMISSION_DENIED', 'DATA_SCOPE_DENIED',
@@ -162,7 +176,7 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
         final_message['content'] = answer
         messages.append(final_message)
         self._save_conversation(user, cid, messages)
-        state = 'EXECUTED' if executed else ('PENDING_CONFIRMATION' if pending else ('LOOKUP_ONLY' if _planner_action() == 'TOOL' else 'NOT_EXECUTED'))
+        state = 'EXECUTED' if executed else ('PENDING_CONFIRMATION' if pending else ('LOOKUP_ONLY' if lookup_performed else 'NOT_EXECUTED'))
         if stream:
             yield {'type': 'done', 'answer': answer, 'conversation_id': cid, 'execution_state': state}
             return
