@@ -83,11 +83,11 @@ class BillingUnpaidBillIdScopeTests(unittest.TestCase):
             db.commit()
         return token
 
-    def lookup(self, token, args):
+    def lookup(self, token, args, command='billing.unpaid'):
         response = self.app.test_client().post('/api/agent/tools', json={
             'request_token': token,
             'operation': 'lookup',
-            'command': 'billing.unpaid',
+            'command': command,
             'arguments_json': json.dumps(args, ensure_ascii=False),
         })
         self.assertEqual(response.status_code, 200, response.text[:1200])
@@ -120,12 +120,16 @@ class BillingUnpaidBillIdScopeTests(unittest.TestCase):
             'due_date': period + '-28',
         })['id']
 
-    def test_natural_language_bill_number_becomes_bill_id_filter(self):
-        plan = plan_request('查询账单123', {'billing.unpaid'})
-        self.assertEqual(plan['intent'], 'billing.unpaid')
+    def test_natural_language_specific_bill_uses_all_status_lookup(self):
+        plan = plan_request('查询账单123', {'bill.search', 'billing.unpaid'})
+        self.assertEqual(plan['intent'], 'bill.search')
         self.assertEqual(plan['action'], 'TOOL')
         self.assertEqual(plan['arguments']['bill_id'], 123)
-        self.assertEqual(plan['candidates'], ['billing.unpaid'])
+        self.assertEqual(plan['candidates'], ['bill.search'])
+
+        unpaid = plan_request('查询A栋还有哪些欠费账单', {'bill.search', 'billing.unpaid'})
+        self.assertEqual(unpaid['intent'], 'billing.unpaid')
+        self.assertEqual(unpaid['action'], 'TOOL')
 
     def test_bill_id_is_exact_filter_and_combines_with_other_filters(self):
         _, house_a = self.make_house('A栋', 101)
@@ -149,7 +153,32 @@ class BillingUnpaidBillIdScopeTests(unittest.TestCase):
         mismatch_month = self.lookup(token, {'bill_id': bill_a, 'month': '2026-10'})
         self.assertEqual(mismatch_month, [])
 
-    def test_bill_id_never_bypasses_building_data_scope(self):
+    def test_paid_bill_remains_visible_in_bill_search_but_not_unpaid(self):
+        _, house = self.make_house('A栋', 101)
+        fee = self.business('fee.save', {
+            'community_id': 1,
+            'name': '物业费',
+            'basis': 'fixed',
+            'rate': '100',
+        })['id']
+        bill = self.make_bill(house, fee, '2026-09')
+        self.business('payment.record', {
+            'bill_id': bill,
+            'version': 1,
+            'amount': '100',
+            'channel': 'cash',
+            'reference': 'bill-search-paid-001',
+        })
+        token = self.grant(1)
+
+        all_status = self.lookup(token, {'bill_id': bill}, command='bill.search')
+        self.assertEqual([row['id'] for row in all_status], [bill])
+        self.assertEqual(all_status[0]['status'], 'paid')
+
+        unpaid = self.lookup(token, {'bill_id': bill})
+        self.assertEqual(unpaid, [])
+
+    def test_bill_search_and_unpaid_never_bypass_building_data_scope(self):
         building_a, house_a = self.make_house('A栋', 101)
         _, house_b = self.make_house('B栋', 201)
         fee = self.business('fee.save', {
@@ -175,11 +204,15 @@ class BillingUnpaidBillIdScopeTests(unittest.TestCase):
         visible = self.lookup(token, {})
         self.assertEqual([row['id'] for row in visible], [bill_a])
 
-        own = self.lookup(token, {'bill_id': bill_a})
-        self.assertEqual([row['id'] for row in own], [bill_a])
+        own_unpaid = self.lookup(token, {'bill_id': bill_a})
+        self.assertEqual([row['id'] for row in own_unpaid], [bill_a])
+        foreign_unpaid = self.lookup(token, {'bill_id': bill_b})
+        self.assertEqual(foreign_unpaid, [])
 
-        foreign = self.lookup(token, {'bill_id': bill_b})
-        self.assertEqual(foreign, [])
+        own_any_status = self.lookup(token, {'bill_id': bill_a}, command='bill.search')
+        self.assertEqual([row['id'] for row in own_any_status], [bill_a])
+        foreign_any_status = self.lookup(token, {'bill_id': bill_b}, command='bill.search')
+        self.assertEqual(foreign_any_status, [])
 
 
 if __name__ == '__main__':
