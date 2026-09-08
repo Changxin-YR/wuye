@@ -27,7 +27,7 @@ _RESOLVER_ARGUMENTS = {
     'house.search': {'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id', 'id'},
     'building.search': {'community_id', 'building_id', 'building_name', 'building', 'name', 'id'},
     'unit.search': {'building_id', 'unit_id', 'unit', 'unit_name', 'name', 'id'},
-    'person.search': {'person_id', 'person_name', 'phone', 'id'},
+    'person.search': {'person_id', 'person_name', 'phone', 'id', 'community_id', 'building_id', 'building_name', 'building'},
     'person.properties': {'person_id', 'person_name', 'phone', 'id'},
     'staff.search': {'staff_name', 'username', 'phone', 'community_id', 'building_id', 'id'},
     'complaint_staff.search': {'staff_name', 'username', 'phone', 'community_id', 'building_id', 'id'},
@@ -75,6 +75,9 @@ _PLANNER_OWNED_READ_FIELDS = {
         'id': ('unit_id', 'id'),
     },
     'person.search': {
+        'community_id': ('community_id',),
+        'building_id': ('building_id',),
+        'building_name': ('building_name', 'building'),
         'person_name': ('person_name', 'name'),
         'phone': ('phone',),
         'id': ('person_id', 'id'),
