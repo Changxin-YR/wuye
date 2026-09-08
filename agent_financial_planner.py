@@ -94,8 +94,8 @@ def parse_unpaid_person_name(text):
     """Extract an explicit resident/person name from unpaid-billing questions."""
     value = str(text or '').strip()
     patterns = (
-        r'(?:查询|查一下|查下|看看|看下|查)\s*([\u4e00-\u9fff]{2,4})(?=(?:有没有|是否|有无|还有没有).{0,8}(?:欠费|未缴|未交))',
-        r'([\u4e00-\u9fff]{2,4})(?=(?:有没有|是否|有无|还有没有).{0,8}(?:欠费|未缴|未交))',
+        r'(?:查询|查一下|查下|看看|看下|查)\s*([\u4e00-\u9fff]{2,4}?)(?=(?:还有没有|有没有|是否|有无).{0,8}(?:欠费|未缴|未交))',
+        r'([\u4e00-\u9fff]{2,4}?)(?=(?:还有没有|有没有|是否|有无).{0,8}(?:欠费|未缴|未交))',
     )
     for pattern in patterns:
         matched = re.search(pattern, value)
