@@ -17,7 +17,13 @@ except Exception:  # pragma: no cover
         return False
 
 from agent_planner_state import *
-from agent_planner_state import clear_pending_plan, plan_request as _state_plan_request
+from agent_planner_state import (
+    _store_pending,
+    clear_pending_plan,
+    plan_request as _state_plan_request,
+    visitor_expected_at,
+    visitor_purpose,
+)
 from agent_planner_core import CONFIRM_INTENTS, _candidates
 
 
@@ -167,12 +173,6 @@ def _smooth_context_resolution(text, result, authorized_commands):
 
 
 def _repair_exact_community_followup(text, result, context, authorized_commands):
-    """Accept an exact writable community name even when it has no generic suffix.
-
-    Operators often answer a scope question with the persisted name only, e.g.
-    ``春风苑``. Matching is restricted to the current actor's writable community
-    catalog; zero or multiple matches remain a clarification instead of guessing.
-    """
     if result.get('action') != 'CLARIFY' or result.get('intent') not in {'notice.save', 'notice.batch_publish'}:
         return result
     missing = list(result.get('missing_fields') or [])
@@ -206,12 +206,65 @@ def _repair_exact_community_followup(text, result, context, authorized_commands)
     }
 
 
+def _repair_visitor_create(text, result, context, authorized_commands):
+    """Separate human business facts from internal visitor-create identifiers.
+
+    The user supplies names/address/contact/time. Person and house database IDs
+    are resolved later through scoped read tools, never requested from the user.
+    """
+    if result.get('intent') != 'visitor.create':
+        return result
+    values = dict(result.get('arguments') or {})
+    expected = visitor_expected_at(text)
+    if expected:
+        values['expected_at'] = expected
+    if not values.get('purpose'):
+        purpose = visitor_purpose(text, values.get('person_name'))
+        if purpose:
+            values['purpose'] = purpose
+    resolved_person = (context or {}).get('resolved_person') or {}
+    resolved_house = (context or {}).get('resolved_house') or {}
+    if resolved_person.get('id') and not values.get('person_name'):
+        values['host_person_id'] = resolved_person['id']
+    if resolved_house.get('id') and not (values.get('building_name') and values.get('room_no') is not None):
+        values['house_id'] = resolved_house['id']
+    missing = []
+    if not values.get('visitor_name'):
+        missing.append('visitor')
+    if not (values.get('person_name') or values.get('host_person_id')):
+        missing.append('host_person')
+    if not (values.get('house_id') or (values.get('building_name') and values.get('room_no') is not None)):
+        missing.append('house')
+    if not values.get('phone'):
+        missing.append('phone')
+    if not values.get('expected_at'):
+        missing.append('expected_at')
+    if not values.get('purpose'):
+        missing.append('purpose')
+    candidates = _candidates('visitor.create', set(authorized_commands or ()))
+    if (context or {}).get('person_candidates', 0) > 1 and values.get('person_name'):
+        return {
+            'action': 'DISAMBIGUATE', 'intent': 'visitor.create', 'candidates': candidates,
+            'missing_fields': ['host_person'], 'entity_status': 'AMBIGUOUS', 'arguments': values,
+        }
+    if missing:
+        return {
+            'action': 'CLARIFY', 'intent': 'visitor.create', 'candidates': candidates,
+            'missing_fields': missing, 'entity_status': 'MISSING', 'arguments': values,
+        }
+    return {
+        'action': 'TOOL', 'intent': 'visitor.create', 'candidates': candidates,
+        'missing_fields': [], 'entity_status': 'RESOLVE_MULTI', 'arguments': values,
+    }
+
+
 def _clarification_text(result):
-    """Ask for the first genuinely missing business fact, never an ORM detail."""
     action = result.get('action')
     intent = result.get('intent') or ''
     missing = list(result.get('missing_fields') or [])
     if action == 'DISAMBIGUATE':
+        if intent == 'visitor.create' and 'host_person' in missing:
+            return '我找到了多位同名住户。请补充住户的联系电话或更具体的房屋信息，我再继续登记访客。'
         if intent.startswith('person.') or 'person' in missing:
             return '我找到了多位可能的人员。请补一个能区分的信息，例如联系电话。'
         if intent.startswith('order.'):
@@ -233,7 +286,11 @@ def _clarification_text(result):
     if slot == 'host_person':
         return '这位访客要找哪位住户？直接告诉我住户姓名即可。'
     if slot == 'phone':
-        return '还缺一个联系电话，请直接把手机号或联系电话发给我。'
+        return '还缺访客的联系电话，请直接把手机号或联系电话发给我。' if intent == 'visitor.create' else '还缺一个联系电话，请直接把手机号或联系电话发给我。'
+    if slot == 'expected_at':
+        return '访客预计什么时候到？请带上日期范围，例如“明天下午两点”或“2026-09-09 14:00”。'
+    if slot == 'purpose':
+        return '这次来访的目的是什么？例如拜访、送货、维修或看房。'
     if slot == 'notice_title':
         return '这条公告的标题写什么？'
     if slot == 'notice_content':
@@ -243,7 +300,7 @@ def _clarification_text(result):
     if slot == 'complaint':
         return '你指哪条投诉？可以说投诉内容/住户，或说“刚才那条”。'
     if slot == 'visitor':
-        return '你指哪位访客？可以说访客姓名，或说“刚才登记的那位”。'
+        return '访客叫什么名字？' if intent == 'visitor.create' else '你指哪位访客？可以说访客姓名，或说“刚才登记的那位”。'
     if slot == 'vehicle':
         return '你指哪辆车？直接告诉我车牌号即可。'
     if slot in {'space', 'parking_use'}:
@@ -266,12 +323,8 @@ def _clarification_text(result):
 
 
 def _use_local_clarification(result):
-    """Attach deterministic wording without changing planner state."""
     if result.get('action') not in {'CLARIFY', 'DISAMBIGUATE'}:
         return result
-    # REPEAT is a safety/idempotency state, not a normal missing-slot question.
-    # It must continue to the provider/tool guard so an existing mutation can be
-    # detected without creating a duplicate record.
     if result.get('entity_status') == 'REPEAT':
         return result
     shown = dict(result)
@@ -281,6 +334,7 @@ def _use_local_clarification(result):
 
 def plan_request(message, authorized_commands, context=None):
     text = str(message or '').strip()
+    context = context or {}
     result = _state_plan_request(text, authorized_commands, context)
 
     if result.get('intent') == 'unknown' and re.search(r'发布.*(?:维修|报修).*工单|发布.*工单', text):
@@ -292,5 +346,10 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_order_cancel(text, result, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
     result = _repair_exact_community_followup(text, result, context, authorized_commands)
+    result = _repair_visitor_create(text, result, context, authorized_commands)
     result = _use_local_clarification(result)
+    # The state layer stored the core plan before semantic repairs. Persist the
+    # repaired slots as the canonical pending plan so the next short answer can
+    # continue exactly where this turn stopped.
+    _store_pending(result)
     return result
