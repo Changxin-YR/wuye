@@ -11,7 +11,7 @@ _CN_DIGITS = {'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四':
 READ_COMMANDS = {
     'house.search', 'building.search', 'unit.search', 'person.search', 'person.properties',
     'order.search', 'order.pending', 'complaint.search', 'complaint.stats', 'visitor.search',
-    'vehicle.search', 'parking.search', 'device.search', 'inspection.search', 'fee.search',
+    'vehicle.search', 'parking.search', 'parking_use.search', 'device.search', 'inspection.search', 'fee.search',
     'payment.search', 'billing.unpaid', 'notice.read', 'whoami'
 }
 
@@ -49,7 +49,7 @@ RESOLVER_CANDIDATES = {
     'vehicle.archive': ['vehicle.search', 'vehicle.archive'],
     'parking.save': ['building.search', 'parking.search', 'parking.save'],
     'parking.assign': ['parking.search', 'vehicle.search', 'parking.assign'],
-    'parking.release': ['parking.search', 'vehicle.search', 'parking.release'],
+    'parking.release': ['parking_use.search', 'parking.release'],
     'device.save': ['building.search', 'device.search', 'device.save'],
     'device.archive': ['device.search', 'device.archive'],
     'inspection.create': ['device.search', 'person.search', 'inspection.create'],
