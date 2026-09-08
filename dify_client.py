@@ -25,7 +25,10 @@ class DifyUnavailable(RuntimeError):
 
 
 _TOOL_COMMANDS = ContextVar("bailian_tool_commands", default=None)
-_PLANNER_HINT = ContextVar("bailian_planner_hint", default=None)
+# Standalone client tests/callers historically used tool_callback without a
+# planner context. Keep that compatibility; app.py always sets an explicit
+# planner hint, so ANSWER/CLARIFY/DENY remain hard-gated in production.
+_PLANNER_HINT = ContextVar("bailian_planner_hint", default={"action": "TOOL"})
 
 _WRITE_SUCCESS_RE = re.compile(
     r"(?:已|成功)(?:创建|生成|发布|保存|修改|更新|删除|归档|登记|分配|派单|绑定|解绑|收款|冲销|关闭|取消|完成|执行)"
