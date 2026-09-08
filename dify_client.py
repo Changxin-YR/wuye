@@ -124,6 +124,16 @@ def _normalize_read_call(call):
         return call
     outer = dict(outer)
     outer['operation'] = 'lookup'
+    if command == 'bill.search':
+        hint = _PLANNER_HINT.get() or {}
+        values = dict(hint.get('arguments') or {})
+        planned_bill_id = values.get('bill_id')
+        if hint.get('intent') == 'bill.search' and planned_bill_id not in (None, ''):
+            # A concrete business identifier came from the user's request and
+            # deterministic planner. The provider may present the result but
+            # must not silently switch the lookup to another in-scope bill or
+            # add a status filter that makes the requested bill disappear.
+            outer['arguments_json'] = json.dumps({'bill_id': planned_bill_id}, ensure_ascii=False)
     if command == 'parking_use.search':
         try:
             params = json.loads(outer.get('arguments_json') or '{}')
