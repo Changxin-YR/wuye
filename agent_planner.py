@@ -4,6 +4,32 @@ import re
 
 from agent_security import risk_for
 
+_CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def building_name_variants(name):
+    """Return common persisted forms for a spoken building name."""
+    if not isinstance(name, str) or not name.strip():
+        return set()
+    value = name.strip()
+    variants = {value, value.removesuffix("栋"), value.removesuffix("号楼")}
+    core = re.sub(r"(?:栋|号楼)$", "", value)
+    if core.isdigit():
+        number = int(core)
+    elif core and all(char in _CN_DIGITS or char == "十" for char in core):
+        if core == "十":
+            number = 10
+        elif "十" in core:
+            left, _, right = core.partition("十")
+            number = (_CN_DIGITS.get(left, 1) * 10 if left else 10) + (_CN_DIGITS.get(right, 0) if right else 0)
+        else:
+            number = _CN_DIGITS.get(core)
+    else:
+        number = None
+    if number is not None:
+        variants.update({str(number), f"{number}栋", f"{number}号楼"})
+    return variants
+
 
 ALIASES = (
     # Specific actions must precede generic words such as "工单" and "投诉".
@@ -28,7 +54,9 @@ ALIASES = (
     ("payment.record", ("收款", "已收款")),
     ("bill.batch", ("生成物业费账单", "批量生成账单", "批量算", "批量计算", "批量出账")),
     ("bill.lookup", ("物业费账单", "账单")),
-    ("notice.save", ("发布公告",)),
+    ("notice.archive", ("撤掉公告", "撤下公告", "撤回公告", "删除公告")),
+    ("notice.batch_publish", ("负责的所有小区", "所有负责小区", "所有小区发布公告", "所有小区发公告")),
+    ("notice.save", ("发布公告", "发布", "发个", "发一条", "通知", "提醒", "修改公告", "改公告", "公告改")),
     ("notice.lookup", ("公告", "通知")),
     ("person.save", ("手机号改", "修改手机号", "联系方式改", "电话换")),
     ("person.lookup", ("找人", "查找人员", "找")),
@@ -65,7 +93,18 @@ def _first_command(message, authorized):
             matched = matched or any(word in message for word in words if word in {"这个房子", "空置"})
             matched = matched or ("当前绑定情况" in message)
         elif command == "notice.lookup":
-            matched = any(word in message for word in words) and "发布" not in message
+            matched = any(word in message for word in words) and "发布" not in message and not re.search(r"通知\s*(?:所有|大家|一下)|提醒|发(?:个|一条)", message) and not ("标题" in message and "内容" in message)
+        elif command == "notice.archive":
+            matched = bool(re.search(r"撤掉|撤下|撤回|删除", message)) and "公告" in message
+        elif command in {"notice.save", "notice.batch_publish"}:
+            explicit_fields = "标题" in message and "内容" in message
+            write_verb = bool(re.search(r"发布|发(?:个|一条|个)?|通知|提醒|修改公告|改公告|公告.*改", message)) or explicit_fields
+            read_verb = bool(re.search(r"查询|查看|看看|查一下|查下|查查|最近|有哪些|有什么|历史", message))
+            notice_subject = bool(re.search(r"公告|通知|全区|全小区|所有业主|所有住户|停水|停电|电梯检修|高空抛物", message)) or explicit_fields
+            if command == "notice.batch_publish":
+                matched = bool(re.search(r"负责的所有小区|所有负责小区|所有小区", message)) and write_verb and not read_verb
+            else:
+                matched = write_verb and notice_subject and not read_verb
         elif command == "order.create":
             matched = any(word in message for word in words)
             if "工单" in message and not any(
@@ -79,6 +118,60 @@ def _first_command(message, authorized):
     return None
 
 
+def _notice_entities(message):
+    """Extract only obvious notice fields; policy and persistence stay server-side."""
+    values = {}
+    community = re.search(r"(?:^|[，,：:\s给到在向至])([\u4e00-\u9fffA-Za-z0-9]{1,20}(?:小区|花园|社区|园区))", message)
+    building = re.search(r"([A-Za-z0-9一二三四五六七八九十百]+)\s*(?:栋|号楼)", message)
+    if community:
+        community_name = re.split(r"到|给|在|向|至", community.group(1))[-1]
+        if not any(token in community_name for token in ("全小区", "所有小区", "负责的所有小区", "所有负责小区")):
+            values["community_name"] = community_name
+    if building:
+        values["building_name"] = building.group(1) + "栋"
+        values["notice_scope"] = "building"
+    elif re.search(r"全区|全小区|全园区|所有业主|所有住户|全体业主|全体住户", message):
+        values["notice_scope"] = "community"
+    else:
+        values["notice_scope"] = "community"
+
+    title_match = re.search(r"标题\s*(?:是|为|：|:)\s*([^，,。；;]+)", message)
+    content_match = re.search(r"内容\s*(?:是|为|：|:)\s*(.+)$", message)
+    if title_match:
+        values["notice_title"] = title_match.group(1).strip()
+    if content_match:
+        values["notice_content"] = content_match.group(1).strip(" \t，,。；;")
+    if "notice_content" not in values:
+        colon = re.search(r"[：:]\s*(.+)$", message)
+        if colon:
+            values["notice_content"] = colon.group(1).strip(" \t，,。；;")
+        else:
+            spoken = re.search(r"(?:通知|提醒)(?:所有业主|所有住户|大家|一下)?[，,:：\s]*(.+)$", message)
+            if spoken:
+                values["notice_content"] = spoken.group(1).strip(" \t，,。；;")
+            else:
+                comma = re.search(r"[，,]\s*(.+)$", message)
+                compact = comma.group(1).strip() if comma else message.strip()
+                compact = re.sub(r"^(?:帮我|请|麻烦)?\s*(?:发布|发个|发一条)\s*(?:一个|一条)?", "", compact).strip()
+                if compact == message.strip():
+                    spoken_publish = re.search(r"(?:发布|发个|发一条)\s*(?:一个|一条)?\s*(?:全区|全小区|全园区)?\s*(.+)$", message)
+                    if spoken_publish:
+                        compact = spoken_publish.group(1).strip()
+                compact = re.sub(r"^(?:全区|全小区|全园区)\s*", "", compact)
+                compact = re.sub(r"(?:公告|通知)$", "", compact).strip("，,。；; ")
+                compact = re.sub(r"^(?:提醒|通知)(?:大家|所有业主|所有住户)?\s*", "", compact)
+                if compact:
+                    values["notice_content"] = compact
+    changed = re.search(r"改成\s*(.+)$", message)
+    if changed:
+        values["notice_content"] = changed.group(1).strip(" \t，,。；;")
+    if "notice_title" not in values and values.get("notice_content"):
+        content = values["notice_content"]
+        keyword = next((word for word in ("停水", "停电", "电梯检修", "电梯", "检修", "高空抛物") if word in content), "物业")
+        values["notice_title"] = keyword + ("提醒" if keyword == "高空抛物" else "公告")
+    return values
+
+
 def _entities(message):
     building = re.search(r"([A-Za-z0-9一二三四五六七八九十百]+)\s*(?:栋|号楼)", message)
     unit = re.search(r"([0-9一二三四五六七八九十百]+)\s*单元", message)
@@ -90,6 +183,7 @@ def _entities(message):
     order_no = re.search(r"WO[-一字母0-9]+", message, re.I)
     space_code = re.search(r"(?<![A-Za-z0-9])[A-Za-z]+-\d{1,8}(?![A-Za-z0-9])", message)
     bill_id = re.search(r"(?:账单|收款)\s*#?\s*([1-9][0-9]{0,8})", message)
+    notice_id = re.search(r"(?:公告|通知)\s*#?\s*([1-9][0-9]{0,8})", message)
     amount = re.search(r"(?:收款|收到|收了)\s*(?:人民币|现金)?\s*([0-9]+(?:\.[0-9]{1,2})?)\s*(?:元|块)", message)
     person = re.search(r"给\s*([\u4e00-\u9fff]{2,4})\s*绑定", message)
     person = person or re.search(r"绑定(?:给|到)?\s*([\u4e00-\u9fff]{2,4})", message)
@@ -118,6 +212,8 @@ def _entities(message):
         result["amount"] = float(amount.group(1))
     if bill_id:
         result["bill_id"] = int(bill_id.group(1))
+    if notice_id:
+        result["notice_id"] = int(notice_id.group(1))
     if person:
         person_name=person.group(1).lstrip("把")
         if person_name not in {"业主", "住户", "人员"}:
@@ -148,6 +244,31 @@ def plan_request(message, authorized_commands, context=None):
             return {"action": "CLARIFY", "intent": "ambiguous", "candidates": [], "missing_fields": ["operation"], "entity_status": "AMBIGUOUS"}
         return {"action": "ANSWER", "intent": "unknown", "candidates": [], "missing_fields": [], "entity_status": "UNKNOWN"}
     values = _entities(text)
+    if command in {"notice.save", "notice.batch_publish"}:
+        values.update(_notice_entities(text))
+        resolved_notice = context.get("resolved_notice") or {}
+        if command == "notice.save" and resolved_notice.get("id"):
+            values.setdefault("notice_id", int(resolved_notice["id"]))
+            values.setdefault("notice_title", resolved_notice.get("title"))
+        required_notice = [key for key in ("notice_title", "notice_content") if not values.get(key)]
+        writable = context.get("writable_communities")
+        if isinstance(writable, list):
+            named = values.get("community_name")
+            matches = [row for row in writable if isinstance(row, dict) and (not named or row.get("name") == named)]
+            if named and len(matches) == 1:
+                values["community_id"] = matches[0].get("id")
+            elif command == "notice.save" and len(writable) != 1 and not named:
+                required_notice.insert(0, "community_id")
+            elif named and len(matches) != 1:
+                required_notice.insert(0, "community_id")
+        if command == "notice.save" and values.get("notice_scope") == "building" and context.get("notice_building_candidates") == 0:
+            required_notice.insert(0, "building")
+        if command == "notice.save" and re.search(r"修改公告|改公告|公告.*改|把刚才.*公告", text) and not values.get("notice_id") and not resolved_notice.get("id"):
+            required_notice.insert(0, "notice")
+        if required_notice:
+            return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": required_notice, "entity_status": "MISSING", "arguments": values}
+    if command == "notice.archive" and not values.get("notice_id") and not context.get("resolved_notice"):
+        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["notice"], "entity_status": "MISSING", "arguments": values}
     if command == "order.create" and any(word in text for word in ("再提交", "再次提交", "再来一次", "重复提交")):
         return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["new_request_details"], "entity_status": "REPEAT", "arguments": values}
     if command == "person.save":
@@ -204,7 +325,7 @@ def plan_request(message, authorized_commands, context=None):
             return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": missing, "entity_status": "MISSING", "arguments": values}
     if command == "payment.reverse" and not values.get("bill_id") and not context.get("resolved_payment"):
         return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["payment"], "entity_status": "MISSING", "arguments": values}
-    if command in {"bill.batch", "payment.record", "payment.reverse"}:
+    if command in {"bill.batch", "payment.record", "payment.reverse", "notice.batch_publish", "notice.archive"}:
         action = "CONFIRM"
     else:
         action = "TOOL"

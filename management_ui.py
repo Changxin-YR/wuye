@@ -36,9 +36,10 @@ ACTIONS={
  'people':['person.save','person.archive'],'relations':['relation.end'],'leases':['lease.checkout'],
  'staff':['staff.roles','staff.state'],'roles':[],
  'work-orders':['order.assign','order.reassign','order.accept','order.progress','order.finish','order.close','order.reopen','order.cancel','order.evaluate'],
- 'complaints':['complaint.assign','complaint.resolve','complaint.close'],'notices':['notice.save','notice.archive'],
+ 'complaints':['complaint.assign','complaint.resolve','complaint.close'],'notices':['notice.save','notice.batch_publish','notice.archive'],
  'visitors':['visitor.checkin','visitor.checkout','visitor.cancel'],'vehicles':['vehicle.save','vehicle.archive'],
  'parking':['parking.save','parking.assign'],'parking-uses':['parking.release'],'devices':['device.save','device.archive','inspection.create'],'inspections':['inspection.complete'],
  'fees':['fee.save'],'bills':['payment.record','bill.void'],'payments':['payment.reverse'],'audit':[]}
 
 ACTION_NAMES['bill.batch']='按楼栋批量生成月账单'
+ACTION_NAMES['notice.batch_publish']='向所有负责小区发布公告'

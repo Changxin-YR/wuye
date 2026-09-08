@@ -45,7 +45,9 @@ def main():
             if args.ai or args.infer:
                 client=client_from_env()
                 try:result['ai']=client.check(infer=args.infer)
-                except DifyUnavailable as exc:result['ai']={'status':'error','code':exc.code,'message':str(exc)}
+                except DifyUnavailable as exc:
+                    result['ai']={'status':'error','provider':getattr(client,'provider','dify'),'model':getattr(client,'model',None),
+                                  'configured':bool(getattr(client,'configured',False)),'inference':'error','tool_call':'not_checked','code':exc.code,'message':str(exc)}
             print(json.dumps(result,ensure_ascii=False,indent=2))
             if missing or result.get('ai',{}).get('status')=='error':return 1
         return 0

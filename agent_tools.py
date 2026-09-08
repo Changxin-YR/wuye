@@ -98,6 +98,24 @@ CAPABILITY_CATALOG = {
         'examples': ['提交 P-01 巡检结果'],
         'negative_examples': ['把设备直接标记为完成巡检'],
     },
+    'notice.save': {
+        'when_to_use': '发布一个小区或楼栋公告',
+        'when_not_to_use': '没有明确发布范围且当前用户拥有多个小区时禁止猜测；不得创建小区或楼栋',
+        'required_parameters': ['title', 'content', 'community_id'],
+        'optional_parameters': ['building_id'],
+        'scope_rules': 'building_id=null 表示整个小区；building_id!=null 表示指定楼栋',
+        'examples': ['发布全小区停水公告', '给3栋发布电梯检修公告'],
+        'negative_examples': ['发布公告（多小区时先澄清）'],
+    },
+    'notice.batch_publish': {
+        'when_to_use': '用户明确要求向当前负责的所有小区发布同一条公告',
+        'when_not_to_use': '用户未明确“所有负责小区”或没有可写小区时不要调用',
+        'required_parameters': ['community_ids', 'title', 'content'],
+        'optional_parameters': [],
+        'scope_rules': '服务端重新核验每个小区的 notice.write 和 DataScope，事务中全部成功或全部回滚',
+        'examples': ['给我负责的所有小区发布公告'],
+        'negative_examples': ['发布公告（范围不明确）'],
+    },
 }
 LEGACY_PERMISSION = {
     'house.add': 'property.write', 'house.bind': 'relation.write', 'house.unbind': 'relation.end',
@@ -182,7 +200,7 @@ def normalize(actor, command, params):
         allowed.update(COMMANDS[command][4].split())
     if not isinstance(params, dict) or set(params) - allowed:
         abort(400, description='操作包含未允许的参数')
-    if any(not isinstance(v, (str, int, bool, list)) for v in params.values()):
+    if any(v is not None and not isinstance(v, (str, int, bool, list)) for v in params.values()):
         abort(400, description='操作参数类型错误')
     required = {
         'relation.bind_by_name': ('room_no', 'person_name'),
@@ -209,6 +227,11 @@ def _verification(db, actor, command, params, result):
         'device': Device, 'inspection': Inspection, 'fee': FeeItem, 'bill': Bill, 'payment': Payment,
     }
     rid = result.get('id') if isinstance(result, dict) else None
+    if command == 'notice.batch_publish' and isinstance(result, dict):
+        ids = result.get('ids') or []
+        if not ids or any(not db.get(Notice, int(rid)) for rid in ids):
+            abort(503, description='批量公告服务返回成功但未能回读全部公告')
+        return {'status': 'verified', 'resource': 'notice', 'ids': [int(item) for item in ids]}
     if command == 'payment.record':
         rid = result.get('id')
     if rid is not None and command in DOMAIN_COMMANDS:

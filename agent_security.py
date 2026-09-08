@@ -86,6 +86,7 @@ RISK_BY_COMMAND = {
     "complaint.resolve": R1,
     "complaint.close": R2,
     "notice.save": R1,
+    "notice.batch_publish": R2,
     "notice.archive": R2,
     "visitor.create": R1,
     "visitor.checkin": R1,

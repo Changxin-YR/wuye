@@ -30,6 +30,11 @@ AI_PROVIDER=bailian
 BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 BAILIAN_API_KEY=sk-...
 BAILIAN_MODEL=qwen-plus
+# 可选：DeepSeek V4（仅在完成同一测试集 A/B 后切换默认值）
+# AI_PROVIDER=deepseek
+# DEEPSEEK_BASE_URL=https://api.deepseek.com
+# DEEPSEEK_API_KEY=...
+# DEEPSEEK_MODEL=deepseek-v4-pro
 UPLOAD_FOLDER=uploads
 HOST=127.0.0.1
 PORT=5000
@@ -64,7 +69,7 @@ Invoke-RestMethod http://127.0.0.1:5000/health
 python manage.py diagnose --ai --infer
 ```
 
-`diagnose --ai --infer` 会检查数据库/schema 和百炼模型推理链；不会输出密钥。百炼 API Key 在阿里云百炼控制台创建，模型默认 `qwen-plus`，也可改为账户已开通的 Qwen 模型。
+`diagnose --ai --infer` 会检查数据库/schema 和所选 Provider 的模型推理链；不会输出密钥。百炼默认模型为 `qwen-plus`；DeepSeek Provider 使用 `deepseek-v4-pro`，也可通过环境变量切换为 `deepseek-v4-flash`。
 
 Agent OpenAPI 导入文件为 `config/dify_agent_openapi.json`，服务端地址按部署环境修改；工具只允许调用当前用户授权的业务命令，不接受模型或浏览器传入的角色、用户 ID 作为身份依据。默认百炼模式的短期委托令牌不会进入模型正文；Dify 外部回调兼容模式使用约 3 分钟短期令牌且数据库只保存哈希。
 

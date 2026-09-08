@@ -53,7 +53,12 @@ class BailianClient:
         self.api_key=(api_key or '').strip()
         self.model=(model or 'qwen-plus').strip()
         self.timeout=max(1,min(int(timeout),120))
+        self.provider='bailian'
         self._histories={}
+
+    @property
+    def service_name(self):
+        return 'DeepSeek' if self.provider == 'deepseek' else '百炼'
 
     def _conversation_messages(self, query, user, conversation_id, system_prompt):
         key=(user, conversation_id) if conversation_id else None
@@ -82,7 +87,7 @@ class BailianClient:
             raise DifyUnavailable('百炼地址配置不正确，请管理员检查。','configuration')
 
     def _request(self,method,path,payload=None):
-        if not self.configured:raise DifyUnavailable('AI尚未配置百炼 API Key，请联系管理员。','not_configured')
+        if not self.configured:raise DifyUnavailable(f'AI尚未配置{self.service_name} API Key，请联系管理员。','not_configured')
         self._validate_url()
         try:
             with requests.request(method,self.base_url+path,headers={'Authorization':'Bearer '+self.api_key,'Content-Type':'application/json'},json=payload,timeout=(5,self.timeout),allow_redirects=False) as r:
@@ -97,7 +102,7 @@ class BailianClient:
         except (ValueError,UnicodeError) as exc:raise DifyUnavailable('百炼返回了无法解析的内容。','bad_response') from exc
 
     def _stream_completion(self,payload):
-        if not self.configured:raise DifyUnavailable('AI尚未配置百炼 API Key，请联系管理员。','not_configured')
+        if not self.configured:raise DifyUnavailable(f'AI尚未配置{self.service_name} API Key，请联系管理员。','not_configured')
         self._validate_url()
         try:
             with requests.request('POST',self.base_url+'/chat/completions',headers={'Authorization':'Bearer '+self.api_key,'Content-Type':'application/json'},json=payload,timeout=(5,self.timeout),allow_redirects=False,stream=True) as r:
@@ -282,7 +287,20 @@ class BailianClient:
         obj=self._request('GET','/models')
         if not isinstance(obj.get('data'),list):raise DifyUnavailable('百炼模型列表返回格式异常。','bad_response')
         if infer:self.chat('这是连接测试，请只回答：连接成功。','property-healthcheck')
-        return {'status':'ok','app_mode':'chat','model':self.model,'inference_checked':infer,'agent_tools_verified':False,'message':'百炼 API 与模型推理正常；Agent 工具需另做联调' if infer else '百炼 API Key 和模型配置有效'}
+        return {'status':'ok','app_mode':'chat','provider':self.provider,'model':self.model,'configured':self.configured,
+                'inference':'ok' if infer else 'not_checked','tool_call':'ok' if infer else 'not_checked',
+                'inference_checked':infer,'agent_tools_verified':infer,
+                'message':'AI API 与模型推理正常' if infer else 'AI API Key 和模型配置有效'}
+
+
+# One OpenAI-compatible implementation is shared by all direct model providers.
+OpenAICompatibleAgentClient = BailianClient
+
+
+class DeepSeekClient(BailianClient):
+    def __init__(self,base_url,api_key,model='deepseek-v4-pro',timeout=60):
+        super().__init__(base_url,api_key,model,timeout)
+        self.provider='deepseek'
 
 class DifyClient:
     def __init__(self,base_url,api_key,timeout=60):
@@ -354,6 +372,9 @@ def chat(message,user_id,role):
 
 
 def client_from_env():
-    if os.getenv('AI_PROVIDER','bailian').strip().lower()=='dify':
+    provider=os.getenv('AI_PROVIDER','bailian').strip().lower()
+    if provider=='dify':
         return DifyClient(os.getenv('DIFY_BASE_URL','http://127.0.0.1/v1'),os.getenv('DIFY_API_KEY',''),os.getenv('DIFY_TIMEOUT','60'))
+    if provider=='deepseek':
+        return DeepSeekClient(os.getenv('DEEPSEEK_BASE_URL','https://api.deepseek.com'),os.getenv('DEEPSEEK_API_KEY') or os.getenv('DEEPSEEK_KEY',''),os.getenv('DEEPSEEK_MODEL','deepseek-v4-pro'),os.getenv('DIFY_TIMEOUT','60'))
     return BailianClient(os.getenv('BAILIAN_BASE_URL','https://dashscope.aliyuncs.com/compatible-mode/v1'),os.getenv('BAILIAN_API_KEY') or os.getenv('DASHSCOPE_API_KEY',''),os.getenv('BAILIAN_MODEL','qwen-plus'),os.getenv('DIFY_TIMEOUT','60'))

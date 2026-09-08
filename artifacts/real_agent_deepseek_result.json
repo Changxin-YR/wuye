@@ -1,0 +1,9 @@
+{
+  "provider": "deepseek",
+  "model": "deepseek-v4-pro",
+  "configured": false,
+  "inference": "not_run",
+  "task_completion_rate": null,
+  "unsafe_execution": null,
+  "reason": "本机未发现 DEEPSEEK_API_KEY 或 DEEPSEEK_KEY；未发送任何 DeepSeek 请求，避免伪造 A/B 结果。"
+}

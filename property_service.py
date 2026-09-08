@@ -45,6 +45,7 @@ COMMANDS={
  'complaint.resolve':('complaint.handle',False,'id version resolution'),
  'complaint.close':('complaint.handle',False,'id version resolution'),
  'notice.save':('notice.write',False,'id version community_id building_id title content'),
+ 'notice.batch_publish':('notice.write',True,'community_ids title content'),
  'notice.archive':('notice.write',True,'id version reason'),
  'visitor.create':('visitor.write',False,'house_id host_person_id name phone purpose expected_at'),
  'visitor.checkin':('visitor.write',False,'id version'),
@@ -111,7 +112,9 @@ class PropertyService:
         finally:event.remove(self.db,'before_flush',capture)
         result={'message':message,'traceId':self.trace_id}
         if command=='bill.batch':result['url']='/manage/bills'
-        if obj is not None:
+        if command=='notice.batch_publish':
+            result.update(ids=[item.id for item in obj],count=len(obj),url='/manage/notices')
+        elif obj is not None:
             result.update(id=getattr(obj,'id',getattr(obj,'code',None)),record=snapshot(obj),url=f"/manage/{MODULES[type(obj)]}/{getattr(obj,'id',getattr(obj,'code',''))}")
         result=json.loads(encode(result))
         for changed,before in captured.values():audit(self.db,self.actor,command,getattr(changed,'id',getattr(changed,'code','')),before,snapshot(changed),self.source,self.trace_id,obj=changed)
@@ -465,6 +468,15 @@ class PropertyService:
                 o.resolution=(o.resolution+'；回访：'+self.text('resolution',500))[:1000];o.status='closed'
         return o,'投诉处理记录已保存'
     def do_notice(self,action):
+        if action=='batch_publish':
+            ids=self.ids('community_ids')
+            title=self.text('title',100);content=self.text('content',5000)
+            notices=[]
+            for cid in ids:
+                self.policy.get(Community,cid)
+                self.policy.require_scope(cid)
+                notices.append(self.add(Notice,community_id=cid,building_id=None,title=title,content=content))
+            return notices,'公告已批量发布'
         if self.data.get('id'):
             o=self.get(Notice);self.policy.require_scope(o.community_id,o.building_id)
         else:o=Notice(**self.scope_values());self.db.add(o)

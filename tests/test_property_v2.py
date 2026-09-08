@@ -87,6 +87,27 @@ class PropertyV2Tests(unittest.TestCase):
         self.call('notice.save', {'community_id': 1, 'title': '停水通知', 'content': '今晚检修'})
         result = self.tool('notice.read', {}, op='lookup')
         self.assertEqual([row['title'] for row in result['items']], ['停水通知'])
+
+    def test_agent_batch_notice_is_one_confirmed_atomic_command(self):
+        self.call('community.save', {'name': '第二小区', 'address': '测试地址', 'phone': '057100000000'})
+        token = self.grant()
+        data = {'community_ids': [1, 2], 'title': '停水通知', 'content': '明天停水'}
+        proposal = self.tool('notice.batch_publish', data, token=token)
+        self.assertEqual(proposal['status'], 'pending')
+        with self.factory() as db:
+            self.assertEqual(db.scalar(select(func.count(Notice.id))), 0)
+        result = self.client.post('/ai/actions/' + proposal['id'] + '/confirm', json={}, headers={'X-CSRF-Token': self.csrf()})
+        self.assertEqual(result.status_code, 200, result.text)
+        with self.factory() as db:
+            rows = db.scalars(select(Notice).order_by(Notice.community_id)).all()
+            self.assertEqual([(row.community_id, row.building_id) for row in rows], [(1, None), (2, None)])
+
+    def test_agent_batch_notice_rolls_back_when_one_community_is_out_of_scope(self):
+        token = self.grant()
+        proposal = self.tool('notice.batch_publish', {'community_ids': [1, 999], 'title': '停水通知', 'content': '明天停水'}, token=token, expected=404)
+        self.assertEqual(proposal['code'], 'RESOURCE_NOT_FOUND')
+        with self.factory() as db:
+            self.assertEqual(db.scalar(select(func.count(Notice.id))), 0)
     def test_customer_dispatch_engineer_complete_and_verify(self):
         b,u,h=self.setup_house();pid=self.person();self.call('relation.bind',{'house_id':h,'person_id':pid,'kind':'owner'})
         cs=self.staff('service','customer_service');worker=self.staff('engineer','engineer','assigned');other=self.staff('other','engineer','assigned')

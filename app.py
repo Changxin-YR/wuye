@@ -23,7 +23,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from agent_tools import action_view, available_commands, confirm, grant_actor, propose, structured_result
-from agent_planner import plan_request
+from agent_planner import building_name_variants, plan_request
 from agent_security import error_code_for, issue_agent_token, redact_provider_text, safe_record
 from business import BusinessService
 from database import make_engine, missing_schema
@@ -33,8 +33,8 @@ from management import bp as management_bp
 from property_service import audit as domain_audit,snapshot as domain_snapshot
 from business_queries import query as domain_query
 from permissions import Policy
-from dify_client import BailianClient, DifyClient, DifyUnavailable, _PLANNER_HINT, _TOOL_COMMANDS
-from models import AiAction, AiGrant, AiConversation, AuditLog, Base, Evaluation, House, Notice, Notification, OrderLog, Person, User, WorkOrder, utcnow
+from dify_client import BailianClient, DeepSeekClient, DifyClient, DifyUnavailable, OpenAICompatibleAgentClient, _PLANNER_HINT, _TOOL_COMMANDS
+from models import AiAction, AiGrant, AiConversation, AuditLog, Base, Community, Evaluation, House, Notice, Notification, OrderLog, Person, User, WorkOrder, utcnow
 from services import InvalidTransition, ORDER_TYPES, ROLE_TEXT, STATUS_TEXT, can_access_order, log_order, notify, notify_admins, scope_orders, transition_status
 
 PROJECT_ROOT=Path(__file__).resolve().parent
@@ -52,6 +52,8 @@ def create_app(test_config=None):
         AI_PROVIDER=os.getenv('AI_PROVIDER','bailian'),
         BAILIAN_BASE_URL=os.getenv('BAILIAN_BASE_URL','https://dashscope.aliyuncs.com/compatible-mode/v1'),
         BAILIAN_API_KEY=os.getenv('BAILIAN_API_KEY') or os.getenv('DASHSCOPE_API_KEY',''),BAILIAN_MODEL=os.getenv('BAILIAN_MODEL','qwen-plus'),
+        DEEPSEEK_BASE_URL=os.getenv('DEEPSEEK_BASE_URL','https://api.deepseek.com'),
+        DEEPSEEK_API_KEY=os.getenv('DEEPSEEK_API_KEY') or os.getenv('DEEPSEEK_KEY',''),DEEPSEEK_MODEL=os.getenv('DEEPSEEK_MODEL','deepseek-v4-pro'),
         DIFY_BASE_URL=os.getenv('DIFY_BASE_URL','http://127.0.0.1/v1'),DIFY_API_KEY=os.getenv('DIFY_API_KEY',''),
         DIFY_TIMEOUT=int(os.getenv('DIFY_TIMEOUT','60')),APP_ENV=os.getenv('APP_ENV','production'))
     if test_config:app.config.update(test_config)
@@ -72,7 +74,12 @@ def create_app(test_config=None):
     app.register_blueprint(management_bp)
     factory=sessionmaker(bind=engine,expire_on_commit=False,class_=Session)
     legacy_dify = bool(test_config and ('DIFY_BASE_URL' in test_config or 'DIFY_API_KEY' in test_config) and 'AI_PROVIDER' not in test_config)
-    ai_client = DifyClient(app.config['DIFY_BASE_URL'],app.config['DIFY_API_KEY'],app.config['DIFY_TIMEOUT']) if app.config['AI_PROVIDER']=='dify' or legacy_dify else BailianClient(app.config['BAILIAN_BASE_URL'],app.config['BAILIAN_API_KEY'],app.config['BAILIAN_MODEL'],app.config['DIFY_TIMEOUT'])
+    if app.config['AI_PROVIDER']=='dify' or legacy_dify:
+        ai_client=DifyClient(app.config['DIFY_BASE_URL'],app.config['DIFY_API_KEY'],app.config['DIFY_TIMEOUT'])
+    elif str(app.config['AI_PROVIDER']).lower()=='deepseek':
+        ai_client=DeepSeekClient(app.config['DEEPSEEK_BASE_URL'],app.config['DEEPSEEK_API_KEY'],app.config['DEEPSEEK_MODEL'],app.config['DIFY_TIMEOUT'])
+    else:
+        ai_client=BailianClient(app.config['BAILIAN_BASE_URL'],app.config['BAILIAN_API_KEY'],app.config['BAILIAN_MODEL'],app.config['DIFY_TIMEOUT'])
     app.extensions.update(db_engine=engine,db_session=factory,dify=ai_client,ai=ai_client,agent_contexts={})
     folder=Path(app.config['UPLOAD_FOLDER'])
     if not folder.is_absolute():folder=PROJECT_ROOT/folder
@@ -441,7 +448,7 @@ def create_app(test_config=None):
 
     @app.get('/ai/status')
     @login_required
-    def ai_status():return jsonify(configured=app.extensions['dify'].configured,connection_verified=False,provider='bailian' if isinstance(app.extensions['dify'],BailianClient) else 'dify',message='已填写 AI 服务配置，连接状态待检测。')
+    def ai_status():return jsonify(configured=app.extensions['dify'].configured,connection_verified=False,provider=getattr(app.extensions['dify'],'provider','dify'),model=getattr(app.extensions['dify'],'model',None),message='已填写 AI 服务配置，连接状态待检测。')
 
     @app.post('/ai/check')
     @role_required(0)
@@ -474,7 +481,16 @@ def create_app(test_config=None):
             if len(own_houses)==1:
                 planner_context['resolved_house']={'id':own_houses[0].id,'building_name':own_houses[0].building_name,'room_no':own_houses[0].room_no}
                 planner_context['resident_current_house']=True
+        if {'notice.save', 'notice.batch_publish'} & authorized:
+            writable=list(g.db.scalars(Policy(g.db,g.user).query(Community).limit(101)))
+            planner_context['writable_communities']=[{'id':c.id,'name':c.name} for c in writable]
         planner_hint=plan_request(message, authorized, planner_context)
+        if planner_hint.get('intent')=='notice.save' and (planner_hint.get('arguments') or {}).get('building_name'):
+            from models import Building
+            building_name=planner_hint['arguments']['building_name']
+            names=building_name_variants(building_name)
+            planner_context['notice_building_candidates']=len(list(g.db.scalars(Policy(g.db,g.user).query(Building).where(Building.name.in_(names)).limit(3))))
+            planner_hint=plan_request(message, authorized, planner_context)
         person_name=(planner_hint.get('arguments') or {}).get('person_name')
         if person_name:
             person_candidates=len(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==person_name).limit(4)).all())
@@ -504,7 +520,7 @@ def create_app(test_config=None):
         # Publish the narrow delegated grant before an external provider callback.
         # The database stores only the token hash and every callback rechecks IAM.
         g.db.commit()
-        is_bailian=isinstance(app.extensions['dify'],BailianClient)
+        is_bailian=isinstance(app.extensions['dify'],OpenAICompatibleAgentClient)
         if is_bailian:
             # Local Bailian tool callbacks are bound to this closure. The grant
             # secret never needs to be placed in model-visible text.
@@ -576,6 +592,34 @@ def create_app(test_config=None):
                 current=g.db.get(DomainPerson,int(person['id']))
                 if not current:return None
                 params={'id':current.id,'version':current.version,'community_id':current.community_id,'name':current.name,'phone':values['phone']}
+            elif command=='notice.archive':
+                notice_id=values.get('notice_id') or (planner_context.get('resolved_notice') or {}).get('id')
+                if not notice_id:return None
+                notice=policy.get(Notice,int(notice_id))
+                params={'id':notice.id,'version':notice.version,'reason':message.strip()}
+            elif command in {'notice.save','notice.batch_publish'}:
+                communities=planner_context.get('writable_communities') or []
+                named=values.get('community_name')
+                matches=[row for row in communities if not named or row.get('name')==named]
+                title=values.get('notice_title') or values.get('title')
+                content=values.get('notice_content') or values.get('content')
+                if not title or not content or not communities:return None
+                if command=='notice.save' and values.get('notice_id'):
+                    notice=policy.get(Notice,int(values['notice_id']))
+                    params={'id':notice.id,'version':notice.version,'community_id':notice.community_id,'building_id':notice.building_id,'title':title,'content':content}
+                elif command=='notice.batch_publish':
+                    params={'community_ids':[int(row['id']) for row in communities],'title':title,'content':content}
+                else:
+                    if len(matches)!=1:return None
+                    cid=int(matches[0]['id'])
+                    bid=None
+                    if values.get('notice_scope')=='building' or values.get('building_name'):
+                        building_name=values.get('building_name')
+                        names=building_name_variants(building_name)
+                        buildings=list(g.db.scalars(policy.query(Building).where(Building.community_id==cid,Building.name.in_(names)).limit(2)))
+                        if len(buildings)!=1:return None
+                        bid=buildings[0].id
+                    params={'community_id':cid,'building_id':bid,'title':title,'content':content}
             elif command=='order.create':
                 house=one_house()
                 if not house:return None
@@ -678,7 +722,7 @@ def create_app(test_config=None):
                     grant=g.db.get(AiGrant,gid);grant.expires_at=utcnow();g.db.commit()
                     yield 'data: '+json.dumps({'type':'error','error':'AI正在处理其他任务，请稍后再试'},ensure_ascii=False)+'\n\n';return
                 try:
-                    if isinstance(app.extensions['dify'],BailianClient):
+                    if isinstance(app.extensions['dify'],OpenAICompatibleAgentClient):
                         command_token=_TOOL_COMMANDS.set(authorized)
                         planner_token=_PLANNER_HINT.set(planner_hint)
                         try:
@@ -722,17 +766,20 @@ def create_app(test_config=None):
                 if planner_hint.get('intent','').startswith('order.'):
                     row=g.db.scalar(Policy(g.db,g.user).query(WorkOrder).order_by(WorkOrder.updated_at.desc()))
                     if row:remembered['resolved_order']={'id':row.id,'order_no':row.order_no}
+                if planner_hint.get('intent','').startswith('notice.'):
+                    row=g.db.scalar(Policy(g.db,g.user).query(Notice).order_by(Notice.updated_at.desc()))
+                    if row:remembered['resolved_notice']={'id':row.id,'title':row.title,'community_id':row.community_id,'building_id':row.building_id}
                 app.extensions['agent_contexts'][(uid,conversation.id)]=remembered
                 actions=[action_view(x) for x in g.db.scalars(select(AiAction).where(AiAction.grant_id==gid).order_by(AiAction.created_at))]
                 g.db.commit()
-                yield 'data: '+json.dumps({'type':'done','conversation_id':conversation.id,'source':'bailian' if isinstance(app.extensions['dify'],BailianClient) else 'dify','scope':context['scope'],'actions':actions},ensure_ascii=False)+'\n\n'
+                yield 'data: '+json.dumps({'type':'done','conversation_id':conversation.id,'source':getattr(app.extensions['dify'],'provider','dify'),'scope':context['scope'],'actions':actions},ensure_ascii=False)+'\n\n'
             return Response(stream_with_context(stream_result()),mimetype='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
         failure=None;result=None
         if not ai_slots.acquire(blocking=False):
             grant=g.db.get(AiGrant,gid);grant.expires_at=utcnow();g.db.commit();return jsonify(error='AI正在处理其他任务，请稍后再试'),429
         try:
             try:
-                if isinstance(app.extensions['dify'],BailianClient):
+                if isinstance(app.extensions['dify'],OpenAICompatibleAgentClient):
                     command_token=_TOOL_COMMANDS.set(authorized)
                     planner_token=_PLANNER_HINT.set(planner_hint)
                     try:result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream,bailian_tool,system_prompt=system_instruction)
@@ -766,8 +813,11 @@ def create_app(test_config=None):
         if planner_hint.get('intent','').startswith('order.'):
             row=g.db.scalar(Policy(g.db,g.user).query(WorkOrder).order_by(WorkOrder.updated_at.desc()))
             if row:remembered['resolved_order']={'id':row.id,'order_no':row.order_no}
+        if planner_hint.get('intent','').startswith('notice.'):
+            row=g.db.scalar(Policy(g.db,g.user).query(Notice).order_by(Notice.updated_at.desc()))
+            if row:remembered['resolved_notice']={'id':row.id,'title':row.title,'community_id':row.community_id,'building_id':row.building_id}
         app.extensions['agent_contexts'][(uid,conversation.id)]=remembered
-        return jsonify(answer=redact_provider_text(result['answer'],token),conversation_id=conversation.id,source='bailian' if isinstance(app.extensions['dify'],BailianClient) else 'dify',scope=context['scope'],
+        return jsonify(answer=redact_provider_text(result['answer'],token),conversation_id=conversation.id,source=getattr(app.extensions['dify'],'provider','dify'),scope=context['scope'],
                        actions=[action_view(x) for x in g.db.scalars(select(AiAction).where(AiAction.grant_id==gid).order_by(AiAction.created_at))])
 
     @app.post('/api/agent/tools')
