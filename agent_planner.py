@@ -29,14 +29,14 @@ from agent_planner_core import CONFIRM_INTENTS, _candidates
 
 _CONTEXT_WORDS = re.compile(r'刚才|刚刚|这个|这个人|这个房|这个工单|这张单|上一笔|最近一笔|上一个|今天的|当前的|已经离开|已经报废|可以进|进去了|处理结果|回访|结案|返修|撤回')
 _CONTEXT_RESOLVERS = {
-    'order.assign': ('order.search', 'person.search'),
+    'order.assign': ('order.search', 'staff.search'),
     'order.accept': ('order.search',),
     'order.progress': ('order.search',),
     'order.finish': ('order.search',),
     'order.reopen': ('order.search',),
     'order.close': ('order.search',),
     'order.cancel': ('order.search',),
-    'complaint.assign': ('complaint.search', 'person.search'),
+    'complaint.assign': ('complaint.search', 'staff.search'),
     'complaint.resolve': ('complaint.search',),
     'complaint.close': ('complaint.search',),
     'visitor.checkin': ('visitor.search',),
@@ -128,6 +128,38 @@ def _repair_order_cancel(text, result, authorized_commands):
         'missing_fields': [],
         'entity_status': 'RESOLVED' if arguments.get('order_no') else 'RESOLVE_FIRST',
         'arguments': arguments,
+    }
+
+
+def _repair_order_assign(result, context, authorized_commands):
+    """Resolve the work order and repair worker independently before dispatch.
+
+    ``repairer_id`` is a sys_user identifier, not a resident Person identifier.
+    The model therefore never gets to infer it from a name. Both the order row
+    and an eligible worker row are selected through scoped read capabilities.
+    """
+    if result.get('intent') != 'order.assign':
+        return result
+    values = dict(result.get('arguments') or {})
+    if not values.get('repairer_name'):
+        return result
+    resolved_order = (context or {}).get('resolved_order') or {}
+    if not values.get('order_no') and resolved_order.get('id'):
+        values['order_id'] = resolved_order['id']
+    if not (values.get('order_no') or values.get('order_id')):
+        return result
+    authorized = set(authorized_commands or ())
+    required = ('order.search', 'staff.search', 'order.assign')
+    if not all(command in authorized for command in required):
+        return result
+    clear_pending_plan()
+    return {
+        'action': 'TOOL',
+        'intent': 'order.assign',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_MULTI',
+        'arguments': values,
     }
 
 
@@ -344,12 +376,10 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_payment_target(text, result, authorized_commands)
     result = _repair_device_code(result)
     result = _repair_order_cancel(text, result, authorized_commands)
+    result = _repair_order_assign(result, context, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
     result = _repair_exact_community_followup(text, result, context, authorized_commands)
     result = _repair_visitor_create(text, result, context, authorized_commands)
     result = _use_local_clarification(result)
-    # The state layer stored the core plan before semantic repairs. Persist the
-    # repaired slots as the canonical pending plan so the next short answer can
-    # continue exactly where this turn stopped.
     _store_pending(result)
     return result
