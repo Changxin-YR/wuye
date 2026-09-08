@@ -125,10 +125,33 @@ def query(db, actor, command, args):
         return policy.identity()
 
     if command == "notice.read":
+        community_id = args.get("community_id")
+        building_id = args.get("building_id")
+        building_name = args.get("building_name") or args.get("building")
+        target_building = None
+        if building_id:
+            target_building = policy.get(Building, int(building_id))
+            if community_id and target_building.community_id != int(community_id):
+                abort(400, description="楼栋不属于指定小区")
+        elif building_name:
+            buildings = policy.query(Building)
+            if community_id:
+                buildings = buildings.where(Building.community_id == int(community_id))
+            buildings = buildings.where(Building.name.in_(_building_aliases(building_name)))
+            matches = list(db.scalars(buildings.order_by(Building.id).limit(2)))
+            if not matches:
+                abort(404, description="未找到该楼栋或该楼栋不在当前账号数据范围内")
+            if len(matches) > 1:
+                abort(409, description="多个小区存在同名楼栋，请补充小区后再查询")
+            target_building = matches[0]
         q = policy.query(Notice).order_by(Notice.id.desc())
-        for key in ("community_id", "building_id"):
-            if args.get(key):
-                q = q.where(getattr(Notice, key) == args[key])
+        if target_building:
+            q = q.where(
+                Notice.community_id == target_building.community_id,
+                or_(Notice.building_id.is_(None), Notice.building_id == target_building.id),
+            )
+        elif community_id:
+            q = q.where(Notice.community_id == int(community_id))
         return _items(db.scalars(q.limit(101)))
 
     if command in {"house.search", "person.properties", "billing.unpaid"}:
