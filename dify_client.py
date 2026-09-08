@@ -218,6 +218,19 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
     target is selected, subsequent mutation calls are bound to that exact row.
     """
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
+    hint = _PLANNER_HINT.get() or {}
+    clarification = hint.get('clarification_text')
+    if isinstance(clarification, str) and clarification.strip():
+        answer = clarification.strip()
+        cid = conversation_id or str(uuid.uuid4())
+        messages.append({'role': 'assistant', 'content': answer})
+        self._save_conversation(user, cid, messages)
+        if stream:
+            yield {'type': 'delta', 'content': answer}
+            yield {'type': 'done', 'answer': answer, 'conversation_id': cid, 'execution_state': 'NOT_EXECUTED'}
+            return
+        return {'answer': answer, 'conversation_id': cid, 'execution_state': 'NOT_EXECUTED'}
+
     seen_tool_calls = set()
     completed_commands = set()
     previous_progress = None
@@ -231,7 +244,6 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
     resolver_ready = False
     resolved_item = None
     tools = self._tool_definition()
-    hint = _PLANNER_HINT.get() or {}
     resolve_first = hint.get('entity_status') == 'RESOLVE_FIRST'
     resolve_strategy = (hint.get('arguments') or {}).get('_resolve_strategy')
     final_intent = hint.get('intent')
@@ -284,8 +296,6 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             }
             provider_calls = [call for call in provider_calls if _parse_call_command(call) in allowed_resolvers]
         elif allow_tools and resolve_first and resolver_ready and resolved_item and provider_calls:
-            # Resolver calls after selection are no-progress loops. Final writes
-            # must point to the exact row the backend just selected.
             filtered = []
             for call in provider_calls:
                 command = _parse_call_command(call)
