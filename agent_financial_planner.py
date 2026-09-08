@@ -1,8 +1,9 @@
 """Deterministic financial slot parsing for the property-management Agent.
 
 Financial writes are never allowed to invent fee items, billing dates, payment
-channels or receipt references. This module only prepares business facts for
-existing scoped resolvers and PropertyService; it never grants permissions.
+channels, receipt references, mutation targets or audit reasons. This module
+only prepares user-supplied business facts for existing scoped resolvers and
+PropertyService; it never grants permissions.
 """
 from datetime import datetime, timedelta
 import re
@@ -70,6 +71,23 @@ def parse_payment_reference(text):
     return matched.group(1).strip() if matched else None
 
 
+def parse_financial_reason(text, intent, followup=False):
+    """Extract an operator-supplied audit reason; never ask the model to invent it."""
+    value = str(text or '').strip()
+    explicit = re.search(r'(?:原因|理由|因为)(?:是|为|：|:)?\s*([^，,。；;]{2,300})', value)
+    if explicit:
+        return explicit.group(1).strip()
+    action = r'作废' if intent == 'bill.void' else r'(?:冲销|冲正|撤回)'
+    suffix = re.search(action + r'[^，,。；;]{0,50}[，,；;]\s*([^。；;]{2,300})', value)
+    if suffix:
+        return suffix.group(1).strip()
+    # For a pending reason question, a short plain reply such as “重复入账” or
+    # “住户已搬走” is itself the reason. Do not treat another command as a reason.
+    if followup and 2 <= len(value) <= 300 and not re.search(r'作废|冲销|冲正|撤回|确认|执行|直接', value):
+        return value
+    return None
+
+
 def _question(slot, intent):
     if slot == 'building':
         return '要给哪一栋生成账单？请直接告诉我楼栋，例如“23栋”。'
@@ -82,13 +100,18 @@ def _question(slot, intent):
     if slot == 'due_date':
         return '账单到期日是哪一天？请给出完整日期，例如“2026-09-30”。我不会自动按30天后推算。'
     if slot == 'bill':
-        return '要登记哪张账单的收款？请告诉我账单编号，例如“账单123”。'
+        return '要处理哪张账单？请告诉我账单编号，例如“账单123”。'
+    if slot == 'payment':
+        return '要冲销哪笔收款？可以告诉我收款记录编号；如果确实是最近一笔，也可以说“上一笔”。'
     if slot == 'amount':
         return '实际核验收到多少钱？请给出明确金额，例如“500元”。'
     if slot == 'channel':
         return '这笔已核验收款的渠道是什么？目前请明确说“现金”或“银行转账”。'
     if slot == 'reference':
         return '还缺已核验的收据号或银行流水号，例如“收据号 CASH-001”或“流水号 BANK-001”。'
+    if slot == 'reason':
+        verb = '作废账单' if intent == 'bill.void' else '冲销收款'
+        return f'请补充这次{verb}的业务原因，例如“重复出账”或“重复入账”。原因会原样写入审计记录。'
     return '还缺一项财务业务信息，请补充后我再生成确认单。'
 
 
@@ -109,7 +132,8 @@ def _result(intent, action, candidates, values, missing=None, status='RESOLVED')
 def repair_financial_plan(text, result, authorized_commands):
     """Turn financial writes into explicit-slot, server-resolved plans."""
     intent = result.get('intent')
-    if intent not in {'bill.create', 'bill.batch', 'payment.record'}:
+    financial_intents = {'bill.create', 'bill.batch', 'bill.void', 'payment.record', 'payment.reverse'}
+    if intent not in financial_intents:
         return result
     # Load the direct-provider extensions only on financial turns. Importing the
     # module mutates only the resolver tables/functions used by dify_client.
@@ -123,6 +147,7 @@ def repair_financial_plan(text, result, authorized_commands):
     fee_name = parse_fee_name(text)
     channel = parse_payment_channel(text)
     reference = parse_payment_reference(text)
+    reason = parse_financial_reason(text, intent, 'reason' in set(result.get('missing_fields') or ()))
     if period:
         values['period'] = period
     if due_date:
@@ -133,6 +158,8 @@ def repair_financial_plan(text, result, authorized_commands):
         values['channel'] = channel
     if reference:
         values['reference'] = reference
+    if reason:
+        values['reason'] = reason
 
     # A common spoken form is “给A栋101生成物业费账单”. The legacy detector sees
     # “栋 ... 生成” and can classify it as batch billing before it reaches the
@@ -188,21 +215,60 @@ def repair_financial_plan(text, result, authorized_commands):
             return _result(intent, 'DENY', candidates, values, status='FORBIDDEN')
         return _result(intent, 'CONFIRM', required, values, status='RESOLVE_MULTI')
 
-    # payment.record: the user-visible bill number is explicit business input.
-    # The server still reloads it through Policy and takes its current version.
-    required = ('payment.record',)
+    if intent == 'bill.void':
+        # A visible bill number is enough to let the backend reload the current
+        # scoped row/version; the LLM never needs to resolve or supply DB ids.
+        missing = []
+        if not values.get('bill_id'):
+            missing.append('bill')
+        if not values.get('reason'):
+            missing.append('reason')
+        candidates = ['bill.void'] if 'bill.void' in authorized else []
+        if missing:
+            return _result(intent, 'CLARIFY', candidates, values, missing, 'MISSING')
+        if 'bill.void' not in authorized:
+            return _result(intent, 'DENY', candidates, values, status='FORBIDDEN')
+        return _result(intent, 'CONFIRM', candidates, values, status='SERVER_OWNED')
+
+    if intent == 'payment.record':
+        # The user-visible bill number is explicit business input. The server
+        # reloads it through Policy and takes its current version.
+        missing = []
+        if not values.get('bill_id'):
+            missing.append('bill')
+        if values.get('amount') in (None, ''):
+            missing.append('amount')
+        if not values.get('channel'):
+            missing.append('channel')
+        if not values.get('reference'):
+            missing.append('reference')
+        candidates = ['payment.record'] if 'payment.record' in authorized else []
+        if missing:
+            return _result(intent, 'CLARIFY', candidates, values, missing, 'MISSING')
+        if 'payment.record' not in authorized:
+            return _result(intent, 'DENY', candidates, values, status='FORBIDDEN')
+        return _result(intent, 'CONFIRM', candidates, values, status='SERVER_OWNED')
+
+    # payment.reverse supports either an explicit receipt record or the user's
+    # explicit “上一笔/最近一笔” reference. The latter must remain a server-owned
+    # read resolver; it is never replaced with a model-provided payment id.
+    explicit_payment = values.get('payment_id') or values.get('id')
+    latest = values.get('_resolve_strategy') == 'latest'
     missing = []
-    if not values.get('bill_id'):
-        missing.append('bill')
-    if values.get('amount') in (None, ''):
-        missing.append('amount')
-    if not values.get('channel'):
-        missing.append('channel')
-    if not values.get('reference'):
-        missing.append('reference')
-    candidates = [item for item in required if item in authorized]
+    if not explicit_payment and not latest:
+        missing.append('payment')
+    if not values.get('reason'):
+        missing.append('reason')
     if missing:
+        candidates = [item for item in ('payment.search', 'payment.reverse') if item in authorized]
         return _result(intent, 'CLARIFY', candidates, values, missing, 'MISSING')
-    if 'payment.record' not in authorized:
-        return _result(intent, 'DENY', candidates, values, status='FORBIDDEN')
-    return _result(intent, 'CONFIRM', required, values, status='SERVER_OWNED')
+    if 'payment.reverse' not in authorized:
+        return _result(intent, 'DENY', [], values, status='FORBIDDEN')
+    if explicit_payment:
+        values['payment_id'] = int(explicit_payment)
+        values.pop('id', None)
+        return _result(intent, 'CONFIRM', ['payment.reverse'], values, status='SERVER_OWNED')
+    required = ('payment.search', 'payment.reverse')
+    if not all(item in authorized for item in required):
+        return _result(intent, 'DENY', [item for item in required if item in authorized], values, status='FORBIDDEN')
+    return _result(intent, 'CONFIRM', required, values, status='RESOLVE_FIRST')
