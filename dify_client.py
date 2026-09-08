@@ -60,6 +60,7 @@ _MULTI_RESOLVE_SPECS = {
     'order.assign': ('order.search', 'staff.search'),
     'complaint.assign': ('complaint.search', 'complaint_staff.search'),
     'inspection.create': ('device.search', 'inspection_staff.search'),
+    'parking.assign': ('parking.search', 'vehicle.search'),
 }
 
 _RESOLVER_LABELS = {
@@ -71,6 +72,8 @@ _RESOLVER_LABELS = {
     'complaint_staff.search': '投诉处理人员',
     'device.search': '设备',
     'inspection_staff.search': '巡检人员',
+    'parking.search': '车位',
+    'vehicle.search': '车辆',
 }
 
 
@@ -231,6 +234,19 @@ def _multi_resolver_fallback(command, resolved=None):
                 params['building_id'] = device['building_id']
         else:
             return None
+    elif intent == 'parking.assign':
+        if command == 'parking.search':
+            space_code = values.get('space_code')
+            if not space_code:
+                return None
+            params['space_code'] = str(space_code).strip().upper()
+        elif command == 'vehicle.search':
+            plate = values.get('plate')
+            if not plate:
+                return None
+            params['plate'] = str(plate).strip().upper().replace(' ', '')
+        else:
+            return None
     else:
         return None
     return {'operation': 'lookup', 'command': command, 'arguments_json': json.dumps(params, ensure_ascii=False)}
@@ -359,6 +375,13 @@ def _multi_resolved_write_fallback(resolved):
             'checklist': values['checklist'],
         }
         return {'operation': 'execute', 'command': 'inspection.create', 'arguments_json': json.dumps(params, ensure_ascii=False)}
+    if intent == 'parking.assign':
+        space = resolved.get('parking.search') or {}
+        vehicle = resolved.get('vehicle.search') or {}
+        if space.get('id') is None or vehicle.get('id') is None:
+            return None
+        params = {'space_id': space['id'], 'vehicle_id': vehicle['id']}
+        return {'operation': 'execute', 'command': 'parking.assign', 'arguments_json': json.dumps(params, ensure_ascii=False)}
     return None
 
 
