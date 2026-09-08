@@ -304,6 +304,8 @@ def _repair_parking_release(text, result, authorized_commands):
     if result.get('intent') != 'parking.release':
         return result
     values = dict(result.get('arguments') or {})
+    for internal_key in ('id', 'version', 'parking_use_id'):
+        values.pop(internal_key, None)
     if values.get('space_code'):
         values['space_code'] = str(values['space_code']).strip().upper()
     if values.get('plate'):
