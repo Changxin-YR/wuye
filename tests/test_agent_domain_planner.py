@@ -6,7 +6,7 @@ from agent_planner import plan_request
 ALL = {
     'house.search','building.search','unit.search','person.search','person.properties',
     'order.search','order.pending','complaint.search','complaint.stats','visitor.search',
-    'vehicle.search','parking.search','device.search','inspection.search','fee.search',
+    'vehicle.search','parking.search','parking_use.search','device.search','inspection.search','fee.search',
     'payment.search','billing.unpaid','notice.read','whoami','notice.save','notice.batch_publish',
     'notice.archive','relation.bind_by_name','property.archive','house.save','house.ownership',
     'unit.save','person.save','lease.checkout','lease.create','relation.end','order.create',
@@ -57,8 +57,10 @@ class DomainPlannerTests(unittest.TestCase):
         self.check('给P-01安排巡检', 'inspection.create', 'CLARIFY')
         visitor = self.check('确认刚才的访客进入', 'visitor.checkin', 'TOOL')
         self.assertEqual(visitor['entity_status'], 'RESOLVE_FIRST')
-        parking = self.check('结束刚才的车位使用', 'parking.release', 'CONFIRM')
-        self.assertEqual(parking['entity_status'], 'RESOLVE_FIRST')
+        parking = self.check('结束刚才的车位使用', 'parking.release', 'CLARIFY')
+        self.assertEqual(parking['entity_status'], 'MISSING')
+        self.assertIn('parking_use', parking['missing_fields'])
+        self.assertIn('reason', parking['missing_fields'])
         payment = self.check('撤回上一笔收款记录', 'payment.reverse', 'CONFIRM')
         self.assertEqual(payment['entity_status'], 'RESOLVE_FIRST')
 
