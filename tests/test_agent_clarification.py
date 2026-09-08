@@ -11,7 +11,6 @@ from dify_client import BailianClient, _PLANNER_HINT
 class PlannerClarificationTests(unittest.TestCase):
     def setUp(self):
         self.app = Flask(__name__)
-        self.app.config['AI_PROVIDER'] = 'bailian'
         self.context = {
             'writable_communities': [
                 {'id': 1, 'name': '春风苑'},
@@ -37,19 +36,18 @@ class PlannerClarificationTests(unittest.TestCase):
 
     def test_notice_scope_question_is_specific_and_pending_plan_survives(self):
         first = self.plan('发布公告：明天停水')
-        self.assertEqual(first['action'], 'ANSWER')
-        self.assertEqual(first['pending_action'], 'CLARIFY')
+        self.assertEqual(first['action'], 'CLARIFY')
         self.assertIn('哪个小区', first['clarification_text'])
         second = self.plan('春风苑', 'conv-a')
         self.assertEqual(second['intent'], 'notice.save')
         self.assertEqual(second['action'], 'TOOL')
         self.assertEqual(second['arguments']['community_id'], 1)
 
-    def test_dify_keeps_legacy_clarify_contract(self):
-        self.app.config['AI_PROVIDER'] = 'dify'
+    def test_clarification_text_is_additive_and_does_not_change_state_contract(self):
         result = self.plan('发布公告：明天停水')
         self.assertEqual(result['action'], 'CLARIFY')
-        self.assertNotIn('clarification_text', result)
+        self.assertNotIn('pending_action', result)
+        self.assertTrue(result['clarification_text'])
 
 
 class ProviderClarificationTests(unittest.TestCase):
@@ -57,9 +55,8 @@ class ProviderClarificationTests(unittest.TestCase):
         client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
         calls = []
         token = _PLANNER_HINT.set({
-            'action': 'ANSWER',
+            'action': 'CLARIFY',
             'intent': 'notice.save',
-            'pending_action': 'CLARIFY',
             'clarification_text': '这条公告要发布到哪个小区？直接告诉我小区名称即可。',
             'candidates': ['notice.save'],
         })
