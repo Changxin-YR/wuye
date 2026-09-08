@@ -73,7 +73,12 @@ def _expected_write():
     if action == 'TOOL' and intent and intent not in _READ_ONLY_INTENTS and intent not in {'unknown', 'security_boundary'}:
         return True
     fallback = hint.get('tool_call')
-    return isinstance(fallback, dict) and fallback.get('operation') in {'execute', 'propose'}
+    if not isinstance(fallback, dict):
+        return False
+    command = str(fallback.get('command') or '')
+    if command in _READ_ONLY_INTENTS:
+        return False
+    return fallback.get('operation') in {'execute', 'propose'}
 
 
 def _parse_call_args(call):
