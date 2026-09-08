@@ -34,6 +34,7 @@ QUERIES = {
     "device.search": "device.read",
     "inspection.search": "inspection.read",
     "fee.search": "billing.read",
+    "bill.search": "billing.read",
     "payment.search": "billing.read",
     "billing.unpaid": "billing.read",
     "notice.read": "notice.read",
@@ -352,6 +353,18 @@ def query(db, actor, command, args):
         if args.get("name"):
             q = q.where(FeeItem.name.contains(str(args["name"])[:80], autoescape=True))
         return _items(db.scalars(q.limit(101)))
+
+    if command == "bill.search":
+        q = policy.query(Bill)
+        bill_id = args.get("bill_id") or args.get("id")
+        if bill_id:
+            q = q.where(Bill.id == bill_id)
+        for key in ("community_id", "building_id", "house_id", "fee_item_id", "status"):
+            if args.get(key):
+                q = q.where(getattr(Bill, key) == args[key])
+        if args.get("month"):
+            q = q.where(Bill.period == args["month"])
+        return _items(db.scalars(q.order_by(Bill.id.desc()).limit(101)))
 
     if command == "payment.search":
         q = policy.query(Payment)
