@@ -53,6 +53,34 @@ _RESOLVER_ARGUMENTS = {
 # planner owns that target. The provider may present the result but may not
 # silently switch to another in-scope object or add filters that hide it.
 _PLANNER_OWNED_READ_FIELDS = {
+    'house.search': {
+        'community_id': ('community_id',),
+        'building_id': ('building_id',),
+        'building_name': ('building_name', 'building'),
+        'unit': ('unit', 'unit_name'),
+        'room_no': ('room_no',),
+        'id': ('house_id', 'id'),
+    },
+    'building.search': {
+        'community_id': ('community_id',),
+        'building_name': ('building_name', 'building', 'name'),
+        'id': ('building_id', 'id'),
+    },
+    'unit.search': {
+        'building_id': ('building_id',),
+        'unit': ('unit', 'unit_name', 'name'),
+        'id': ('unit_id', 'id'),
+    },
+    'person.search': {
+        'person_name': ('person_name', 'name'),
+        'phone': ('phone',),
+        'id': ('person_id', 'id'),
+    },
+    'person.properties': {
+        'person_name': ('person_name', 'name'),
+        'phone': ('phone',),
+        'id': ('person_id', 'id'),
+    },
     'order.search': {'order_no': ('order_no',)},
     'complaint.search': {'id': ('id', 'complaint_id')},
     'visitor.search': {'id': ('id',), 'phone': ('phone',), 'name': ('name', 'visitor_name')},
