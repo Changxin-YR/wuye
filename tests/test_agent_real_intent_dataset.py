@@ -1,0 +1,55 @@
+import json
+import unittest
+from pathlib import Path
+
+from agent_planner import READ_COMMANDS, RESOLVER_CANDIDATES, plan_request
+
+
+CANONICAL = {
+    'vehicle.lookup': 'parking.search',
+    'parking.lookup': 'parking.search',
+    'device.lookup': 'device.search',
+}
+
+
+class RealIntentDatasetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = Path(__file__).parent / 'fixtures' / 'real_agent_tasks.json'
+        cls.cases = json.loads(path.read_text(encoding='utf-8'))
+        cls.authorized = set(READ_COMMANDS)
+        for values in RESOLVER_CANDIDATES.values():
+            cls.authorized.update(values)
+        for case in cls.cases:
+            intent = CANONICAL.get(case['expected_intent'], case['expected_intent'])
+            if intent not in {'security_boundary', 'person.lookup'}:
+                cls.authorized.add(intent)
+        cls.context = {
+            'writable_communities': [
+                {'id': 1, 'name': 'A小区'},
+                {'id': 2, 'name': 'B小区'},
+            ]
+        }
+
+    def test_all_real_world_inputs_have_the_expected_business_intent(self):
+        failures = []
+        for case in self.cases:
+            expected = CANONICAL.get(case['expected_intent'], case['expected_intent'])
+            result = plan_request(case['input'], self.authorized, self.context)
+            if result.get('intent') != expected:
+                failures.append((case['id'], case['input'], expected, result.get('intent'), result.get('action')))
+        self.assertEqual(failures, [], 'intent mismatches: ' + repr(failures))
+
+    def test_no_non_security_real_task_falls_back_to_unknown(self):
+        unknown = []
+        for case in self.cases:
+            if case['expected_intent'] == 'security_boundary':
+                continue
+            result = plan_request(case['input'], self.authorized, self.context)
+            if result.get('intent') == 'unknown':
+                unknown.append((case['id'], case['input']))
+        self.assertEqual(unknown, [], 'unknown intents: ' + repr(unknown))
+
+
+if __name__ == '__main__':
+    unittest.main()
