@@ -33,6 +33,11 @@ class ReadOnlyOperationGuardTests(unittest.TestCase):
 
     def test_explicit_read_targets_are_owned_by_planner(self):
         cases = [
+            ('house.search', {'building_name': '23栋', 'unit': '3', 'room_no': 311}, {'building_name': '24栋', 'unit': '9', 'room_no': 999, 'id': 999}, {'building_name': '23栋', 'unit': '3', 'room_no': 311}),
+            ('building.search', {'community_id': 1, 'building_name': '3栋'}, {'community_id': 2, 'building_name': '8栋', 'id': 999}, {'community_id': 1, 'building_name': '3栋'}),
+            ('unit.search', {'building_id': 7, 'unit': '3'}, {'building_id': 8, 'unit': '9', 'id': 999}, {'building_id': 7, 'unit': '3'}),
+            ('person.search', {'person_name': '王五', 'phone': '13800000123'}, {'person_name': '赵六', 'phone': '13900000999', 'id': 999}, {'person_name': '王五', 'phone': '13800000123'}),
+            ('person.properties', {'person_name': '王五', 'phone': '13800000123'}, {'person_name': '赵六', 'phone': '13900000999', 'id': 999}, {'person_name': '王五', 'phone': '13800000123'}),
             ('order.search', {'order_no': 'WO-2026-001'}, {'order_no': 'WO-EVIL'}, {'order_no': 'WO-2026-001'}),
             ('complaint.search', {'id': 123}, {'id': 999, 'status': 'open'}, {'id': 123}),
             ('visitor.search', {'id': 23}, {'id': 999, 'phone': '13800000000'}, {'id': 23}),
@@ -45,6 +50,7 @@ class ReadOnlyOperationGuardTests(unittest.TestCase):
             ('bill.search', {'bill_id': 123}, {'bill_id': 999, 'status': 'unpaid'}, {'bill_id': 123}),
             ('payment.search', {'id': 456}, {'id': 999, 'bill_id': 888}, {'id': 456}),
             ('billing.unpaid', {'bill_id': 321}, {'bill_id': 999, 'month': '2026-01'}, {'bill_id': 321}),
+            ('notice.read', {'community_id': 1, 'building_name': '3栋'}, {'community_id': 2, 'building_name': '8栋'}, {'community_id': 1, 'building_name': '3栋'}),
         ]
         for command, planner_arguments, malicious_arguments, expected in cases:
             with self.subTest(command=command):
