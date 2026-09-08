@@ -1,7 +1,13 @@
 import json
 import unittest
 
-from dify_client import _READ_ONLY_INTENTS, _normalize_read_call, _synthetic_call
+from dify_client import (
+    _PLANNER_HINT,
+    _READ_ONLY_INTENTS,
+    _expected_write,
+    _normalize_read_call,
+    _synthetic_call,
+)
 
 
 class ReadOnlyOperationGuardTests(unittest.TestCase):
@@ -22,6 +28,23 @@ class ReadOnlyOperationGuardTests(unittest.TestCase):
                     self.assertEqual(args['command'], command)
                     self.assertEqual(args['operation'], 'lookup')
 
+    def test_read_fallback_never_marks_turn_as_expected_write(self):
+        for command in sorted(_READ_ONLY_INTENTS):
+            with self.subTest(command=command):
+                token = _PLANNER_HINT.set({
+                    'action': 'TOOL',
+                    'intent': command,
+                    'tool_call': {
+                        'operation': 'execute',
+                        'command': command,
+                        'arguments_json': '{}',
+                    },
+                })
+                try:
+                    self.assertFalse(_expected_write())
+                finally:
+                    _PLANNER_HINT.reset(token)
+
     def test_mutation_operation_is_not_silently_downgraded(self):
         call = _synthetic_call({
             'operation': 'execute',
@@ -30,6 +53,21 @@ class ReadOnlyOperationGuardTests(unittest.TestCase):
         }, 'visitor-write')
         normalized = _normalize_read_call(call)
         self.assertEqual(self._args(normalized)['operation'], 'execute')
+
+    def test_mutation_fallback_still_counts_as_expected_write(self):
+        token = _PLANNER_HINT.set({
+            'action': 'TOOL',
+            'intent': 'visitor.create',
+            'tool_call': {
+                'operation': 'execute',
+                'command': 'visitor.create',
+                'arguments_json': '{}',
+            },
+        })
+        try:
+            self.assertTrue(_expected_write())
+        finally:
+            _PLANNER_HINT.reset(token)
 
     def test_malformed_call_is_left_for_existing_validator(self):
         malformed = {'id': 'bad', 'type': 'function', 'function': {'name': 'property_agent_tool', 'arguments': '{'}}
