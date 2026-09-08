@@ -226,22 +226,16 @@ def _clarification_text(result):
 
 
 def _use_local_clarification(result):
-    """Route direct-model clarifications through a deterministic local reply.
+    """Attach deterministic wording without changing planner state.
 
-    The stateful planner has already stored the pending plan before this wrapper
-    runs, so changing the presentation action to ANSWER does not lose the task.
-    Dify keeps its legacy path untouched.
+    CLARIFY/DISAMBIGUATE are state-machine decisions used by pending-plan,
+    idempotency and provider guards. Presentation must never rewrite them into
+    ANSWER. The HTTP layer may display ``clarification_text`` directly while the
+    original action remains authoritative.
     """
     if result.get('action') not in {'CLARIFY', 'DISAMBIGUATE'}:
         return result
-    if not has_request_context() or request is None or request.path != '/ai/chat':
-        return result
-    provider = str(current_app.config.get('AI_PROVIDER', 'bailian')).lower() if current_app is not None else 'bailian'
-    if provider == 'dify':
-        return result
     shown = dict(result)
-    shown['pending_action'] = result.get('action')
-    shown['action'] = 'ANSWER'
     shown['clarification_text'] = _clarification_text(result)
     return shown
 
