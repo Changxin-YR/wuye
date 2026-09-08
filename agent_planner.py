@@ -576,3 +576,17 @@ def plan_request(message, authorized_commands, context=None):
     result = _use_local_clarification(result)
     _store_pending(result)
     return result
+
+
+# Final safety layer: keep the mature planner behavior above intact, then make
+# financial writes stricter and persist the stricter pending plan. This avoids
+# duplicating the general state machine while ensuring finance never relies on
+# provider guesses or implicit defaults.
+_base_plan_request = plan_request
+
+def plan_request(message, authorized_commands, context=None):
+    from agent_financial_planner import repair_financial_plan
+    result = _base_plan_request(message, authorized_commands, context)
+    result = repair_financial_plan(str(message or '').strip(), result, authorized_commands)
+    _store_pending(result)
+    return result
