@@ -207,6 +207,12 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
         # a normal plan cannot be replayed twice and RESOLVE_FIRST cannot skip
         # its scoped resolver by synthesizing the final mutation too early.
         calls = _core._planner_calls(message, provider_calls, force_final, False) if allow_tools else []
+        # A provider can ask for a real Tool Call that is outside the deterministic
+        # candidate set. Treat that exactly like prose: discard it and use the
+        # server-side fallback/resolver instead of ending the turn with an empty
+        # assistant message or leaking the provider's wrong tool choice.
+        if provider_calls and not calls:
+            provider_calls = []
         if allow_tools and not provider_calls and not calls:
             fallback = (_PLANNER_HINT.get() or {}).get('tool_call')
             if isinstance(fallback, dict) and not planner_fallback_used and (not resolve_first or resolver_ready):
