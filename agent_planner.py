@@ -93,33 +93,25 @@ def _repair_device_code(result):
 
 
 def _repair_order_cancel(text, result, authorized_commands):
-    """Explicit cancel/withdraw wording outranks descriptive 'already fixed' text."""
     if not re.search(r'(?:撤销|取消).*(?:报修|工单)|(?:报修|工单).*(?:撤销|取消)', text):
         return result
     authorized = set(authorized_commands or ())
-    candidates = [item for item in ('order.search', 'order.cancel') if item in authorized]
-    if 'order.cancel' not in candidates:
+    if 'order.cancel' not in authorized:
         return result
+    resolver = 'order.search' if 'order.search' in authorized else None
     arguments = dict(result.get('arguments') or {})
-    action = 'CONFIRM'
-    if not arguments.get('order_no'):
-        # “我的报修/刚才的报修” should resolve inside the caller's scope instead
-        # of being mistaken for completion merely because the user says it was
-        # already fixed by themselves.
+    if not arguments.get('order_no') and not resolver:
         return {
-            'action': action,
-            'intent': 'order.cancel',
-            'candidates': candidates,
-            'missing_fields': [],
-            'entity_status': 'RESOLVE_FIRST',
-            'arguments': arguments,
+            'action': 'CLARIFY', 'intent': 'order.cancel', 'candidates': ['order.cancel'],
+            'missing_fields': ['order'], 'entity_status': 'MISSING', 'arguments': arguments,
         }
+    candidates = ([resolver] if resolver else []) + ['order.cancel']
     return {
-        'action': action,
+        'action': 'CONFIRM',
         'intent': 'order.cancel',
         'candidates': candidates,
         'missing_fields': [],
-        'entity_status': 'RESOLVED',
+        'entity_status': 'RESOLVED' if arguments.get('order_no') else 'RESOLVE_FIRST',
         'arguments': arguments,
     }
 
@@ -132,11 +124,12 @@ def _smooth_context_resolution(text, result, authorized_commands):
     if not resolvers or not _CONTEXT_WORDS.search(text):
         return result
     authorized = set(authorized_commands or ())
-    candidates = [command for command in resolvers if command in authorized]
-    if intent in authorized:
-        candidates.append(intent)
-    if not candidates or intent not in candidates:
+    resolver_candidates = [command for command in resolvers if command in authorized]
+    # Smooth auto-resolution is allowed only when the actor can actually perform
+    # at least one scoped read resolver and the final intent itself is authorized.
+    if not resolver_candidates or intent not in authorized:
         return result
+    candidates = resolver_candidates + [intent]
     arguments = dict(result.get('arguments') or {})
     if intent == 'visitor.checkin':
         arguments.setdefault('status', 'registered')
