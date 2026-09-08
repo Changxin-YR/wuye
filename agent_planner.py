@@ -36,7 +36,6 @@ _CONTEXT_RESOLVERS = {
     'order.reopen': ('order.search',),
     'order.close': ('order.search',),
     'order.cancel': ('order.search',),
-    'complaint.assign': ('complaint.search', 'staff.search'),
     'complaint.resolve': ('complaint.search',),
     'complaint.close': ('complaint.search',),
     'visitor.checkin': ('visitor.search',),
@@ -132,12 +131,7 @@ def _repair_order_cancel(text, result, authorized_commands):
 
 
 def _repair_order_assign(result, context, authorized_commands):
-    """Resolve the work order and repair worker independently before dispatch.
-
-    ``repairer_id`` is a sys_user identifier, not a resident Person identifier.
-    The model therefore never gets to infer it from a name. Both the order row
-    and an eligible worker row are selected through scoped read capabilities.
-    """
+    """Resolve the work order and repair worker independently before dispatch."""
     if result.get('intent') != 'order.assign':
         return result
     values = dict(result.get('arguments') or {})
@@ -156,6 +150,49 @@ def _repair_order_assign(result, context, authorized_commands):
     return {
         'action': 'TOOL',
         'intent': 'order.assign',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_MULTI',
+        'arguments': values,
+    }
+
+
+def _repair_complaint_assign(text, result, context, authorized_commands):
+    """Resolve a complaint and an eligible handler without model-supplied IDs."""
+    if result.get('intent') != 'complaint.assign':
+        return result
+    values = dict(result.get('arguments') or {})
+    complaint = re.search(r'投诉(?:单|记录)?\s*#?\s*([1-9]\d{0,8})', text)
+    if complaint:
+        values['complaint_id'] = int(complaint.group(1))
+        values['id'] = int(complaint.group(1))
+    assignee = re.search(r'(?:分给|分派给|交给|派给)\s*([\u4e00-\u9fff]{2,8})', text)
+    if assignee:
+        values['assignee_name'] = assignee.group(1).strip()
+    elif values.get('repairer_name'):
+        values['assignee_name'] = values['repairer_name']
+    resolved = (context or {}).get('resolved_complaint') or {}
+    if not values.get('complaint_id') and resolved.get('id'):
+        values['complaint_id'] = int(resolved['id'])
+    contextual = bool(_CONTEXT_WORDS.search(text) or re.search(r'这条投诉|该投诉|刚才.*投诉', text))
+    if not values.get('assignee_name'):
+        shown = dict(result)
+        shown['arguments'] = values
+        return shown
+    if not values.get('complaint_id') and not contextual:
+        shown = dict(result)
+        shown['arguments'] = values
+        return shown
+    authorized = set(authorized_commands or ())
+    required = ('complaint.search', 'complaint_staff.search', 'complaint.assign')
+    if not all(command in authorized for command in required):
+        shown = dict(result)
+        shown['arguments'] = values
+        return shown
+    clear_pending_plan()
+    return {
+        'action': 'TOOL',
+        'intent': 'complaint.assign',
         'candidates': list(required),
         'missing_fields': [],
         'entity_status': 'RESOLVE_MULTI',
@@ -301,6 +338,8 @@ def _clarification_text(result):
             return '我找到了多位可能的人员。请补一个能区分的信息，例如联系电话。'
         if intent.startswith('order.'):
             return '我找到了多张可能的工单。请告诉我工单号，或补充房号/报修内容来确认是哪一张。'
+        if intent == 'complaint.assign' and 'assignee' in missing:
+            return '要把这条投诉交给哪位工作人员处理？直接说姓名即可；同名时我再请你补充区分信息。'
         return '我找到了多个匹配对象。请补充一个能区分它们的信息，例如姓名、联系电话、业务编号或房号。'
     slot = missing[0] if missing else None
     if slot == 'community_id':
@@ -330,7 +369,7 @@ def _clarification_text(result):
     if slot == 'notice':
         return '你要操作哪条公告？可以说公告标题，或说“刚才那条”。'
     if slot == 'complaint':
-        return '你指哪条投诉？可以说投诉内容/住户，或说“刚才那条”。'
+        return '你指哪条投诉？可以直接说投诉编号，例如“投诉#12”；如果就是刚才那条，也可以这样说。'
     if slot == 'visitor':
         return '访客叫什么名字？' if intent == 'visitor.create' else '你指哪位访客？可以说访客姓名，或说“刚才登记的那位”。'
     if slot == 'vehicle':
@@ -377,6 +416,7 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_device_code(result)
     result = _repair_order_cancel(text, result, authorized_commands)
     result = _repair_order_assign(result, context, authorized_commands)
+    result = _repair_complaint_assign(text, result, context, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
     result = _repair_exact_community_followup(text, result, context, authorized_commands)
     result = _repair_visitor_create(text, result, context, authorized_commands)
