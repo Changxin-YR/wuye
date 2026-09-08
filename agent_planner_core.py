@@ -131,7 +131,9 @@ def _detect_intent(text):
         return 'property.archive'
     if re.search(r'(?:建|新增|创建).*[0-9一二三四五六七八九十百]+单元', text):
         return 'unit.save'
-    if re.search(r'(?:登记|新增|创建).*(?:栋|楼).*(?:室|房)', text) or re.search(r'(?:房子|房屋).*(?:标成|改成).*(?:空置|自住|出租)', text):
+    house_create = re.search(r'(?:登记|新增|创建).*(?:栋|楼).*(?:室|房)', text)
+    visitor_phrase = re.search(r'访客|客人|来访', text)
+    if (house_create and not visitor_phrase) or re.search(r'(?:房子|房屋).*(?:标成|改成).*(?:空置|自住|出租)', text):
         return 'house.save'
     if (re.search(r'当前绑定情况', text) or re.search(r'(?:查询|查|看看|瞅|瞧|看下|查下|有没有).*(?:栋|楼|房|室|谁住|住户信息|房屋信息)', text)) and not re.search(r'账单|物业费|欠费', text):
         return 'house.search'
@@ -299,7 +301,9 @@ def _entities(message):
             person_name = matched.group(1)
             break
     repairer = re.search(r'派给\s*([\u4e00-\u9fff]{2,8})', message)
-    visitor = re.search(r'(?:登记访客|访客)\s*([\u4e00-\u9fff]{2,4})', message)
+    visitor = re.search(r'(?:登记访客|访客)\s*([\u4e00-\u9fff]{2,4}?)(?=来找|去|到|，|,|。|；|;|\s|$)', message)
+    if not visitor:
+        visitor = re.search(r'(?:登记访客|访客)\s*([\u4e00-\u9fff]{2,4})(?:$|[，,。；;\s])', message)
     if building:
         result['building_name'] = building.group(1) + '栋'
     if unit:
