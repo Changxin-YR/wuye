@@ -104,7 +104,7 @@ class HouseResidentReadTests(unittest.TestCase):
             'room_no': room_no,
             'area': '90',
             'usage': 'residential',
-            'occupancy': 'occupied',
+            'occupancy': 'owner_occupied',
         })['id']
         return building, unit, house
 
@@ -117,7 +117,7 @@ class HouseResidentReadTests(unittest.TestCase):
             'emergency_contact': '不应暴露',
             'note': '',
         })['id']
-        tenant = self.business('person.save', {
+        family = self.business('person.save', {
             'community_id': 1,
             'name': '赵六',
             'phone': '13900000456',
@@ -132,8 +132,8 @@ class HouseResidentReadTests(unittest.TestCase):
         })
         self.business('relation.bind', {
             'house_id': house,
-            'person_id': tenant,
-            'kind': 'tenant',
+            'person_id': family,
+            'kind': 'family',
             'is_resident': True,
         })
         token = self.grant(1)
@@ -149,7 +149,7 @@ class HouseResidentReadTests(unittest.TestCase):
         residents = {item['name']: item for item in row['residents']}
         self.assertEqual(set(residents), {'王五', '赵六'})
         self.assertEqual(residents['王五']['kind'], 'owner')
-        self.assertEqual(residents['赵六']['kind'], 'tenant')
+        self.assertEqual(residents['赵六']['kind'], 'family')
         self.assertEqual(residents['王五']['phone'], '138****0123')
         self.assertEqual(residents['赵六']['phone'], '139****0456')
         self.assertNotIn('emergency_contact', residents['王五'])
@@ -161,7 +161,7 @@ class HouseResidentReadTests(unittest.TestCase):
         self.assertGreaterEqual(len(result['items']), 1)
         self.assertTrue(all('residents' not in row for row in result['items']))
 
-    def test_ended_or_nonresident_relation_is_not_reported_as_current_resident(self):
+    def test_nonresident_relation_is_not_reported_as_current_resident(self):
         _, _, house = self.make_house()
         contact = self.business('person.save', {
             'community_id': 1,
