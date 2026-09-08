@@ -42,7 +42,6 @@ _CONTEXT_RESOLVERS = {
     'visitor.checkout': ('visitor.search',),
     'visitor.cancel': ('visitor.search',),
     'vehicle.archive': ('vehicle.search',),
-    'parking.release': ('parking.search', 'vehicle.search'),
     'device.archive': ('device.search',),
     'inspection.complete': ('inspection.search', 'device.search'),
     'payment.reverse': ('payment.search',),
@@ -300,6 +299,49 @@ def _repair_parking_assign(result, authorized_commands):
     }
 
 
+def _repair_parking_release(text, result, authorized_commands):
+    """Resolve the active ParkingUse row before proposing a release."""
+    if result.get('intent') != 'parking.release':
+        return result
+    values = dict(result.get('arguments') or {})
+    if values.get('space_code'):
+        values['space_code'] = str(values['space_code']).strip().upper()
+    if values.get('plate'):
+        values['plate'] = str(values['plate']).strip().upper().replace(' ', '')
+    reason = re.search(r'(?:原因|理由|因为)(?:是|为|：|:)?\s*([^，,。；;]{1,300})', text)
+    if reason:
+        values['reason'] = reason.group(1).strip()
+    values['status'] = 'active'
+    missing = []
+    if not (values.get('space_code') or values.get('plate')):
+        missing.append('parking_use')
+    if not values.get('reason'):
+        missing.append('reason')
+    required = ('parking_use.search', 'parking.release')
+    authorized = set(authorized_commands or ())
+    candidates = [command for command in required if command in authorized]
+    if missing:
+        return {
+            'action': 'CLARIFY',
+            'intent': 'parking.release',
+            'candidates': candidates,
+            'missing_fields': missing,
+            'entity_status': 'MISSING',
+            'arguments': values,
+        }
+    if not all(command in authorized for command in required):
+        return result
+    clear_pending_plan()
+    return {
+        'action': 'CONFIRM',
+        'intent': 'parking.release',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_FIRST',
+        'arguments': values,
+    }
+
+
 def _smooth_context_resolution(text, result, authorized_commands):
     if result.get('action') != 'CLARIFY':
         return result
@@ -456,6 +498,8 @@ def _clarification_text(result):
         return '这条巡检任务要求什么时候完成？请给出明确日期和时间，例如“明天下午两点”。'
     if slot == 'checklist':
         return '这次巡检具体要检查哪些项目？例如“检查振动、温度和是否漏水”。'
+    if slot == 'reason':
+        return '请补充这次操作的原因，原因会写入审计记录。'
     if slot == 'person':
         return '你指哪位人员？直接说姓名即可；同名时可以再补联系电话。'
     if slot == 'host_person':
@@ -479,7 +523,7 @@ def _clarification_text(result):
     if slot == 'vehicle':
         return '你指哪辆车？直接告诉我车牌号即可。'
     if slot in {'space', 'parking_use'}:
-        return '你指哪个车位或哪条停车关系？直接说车位编号或车牌即可。'
+        return '你指哪个有效车位使用关系？请直接说车位编号或车牌号。'
     if slot == 'device':
         return '你指哪台设备？直接告诉我设备编号或名称即可。'
     if slot == 'inspection':
@@ -523,6 +567,7 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_complaint_assign(text, result, context, authorized_commands)
     result = _repair_inspection_create(text, result, context, authorized_commands)
     result = _repair_parking_assign(result, authorized_commands)
+    result = _repair_parking_release(text, result, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
     result = _repair_exact_community_followup(text, result, context, authorized_commands)
     result = _repair_visitor_create(text, result, context, authorized_commands)
