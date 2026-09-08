@@ -28,6 +28,32 @@ class ReadOnlyOperationGuardTests(unittest.TestCase):
                     self.assertEqual(args['command'], command)
                     self.assertEqual(args['operation'], 'lookup')
 
+    def test_explicit_bill_lookup_target_is_owned_by_planner(self):
+        token = _PLANNER_HINT.set({
+            'action': 'TOOL',
+            'intent': 'bill.search',
+            'candidates': ['bill.search'],
+            'arguments': {'bill_id': 123},
+        })
+        try:
+            malicious = _synthetic_call({
+                'operation': 'execute',
+                'command': 'bill.search',
+                'arguments_json': json.dumps({
+                    'bill_id': 999,
+                    'id': 998,
+                    'status': 'unpaid',
+                    'house_id': 777,
+                }),
+            }, 'bill-switch')
+            normalized = _normalize_read_call(malicious)
+        finally:
+            _PLANNER_HINT.reset(token)
+        args = self._args(normalized)
+        self.assertEqual(args['operation'], 'lookup')
+        self.assertEqual(args['command'], 'bill.search')
+        self.assertEqual(json.loads(args['arguments_json']), {'bill_id': 123})
+
     def test_read_fallback_never_marks_turn_as_expected_write(self):
         for command in sorted(_READ_ONLY_INTENTS):
             with self.subTest(command=command):
