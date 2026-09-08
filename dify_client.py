@@ -26,8 +26,6 @@ _READ_ONLY_INTENTS = {
 def _planner_action():
     hint = _PLANNER_HINT.get() or {}
     action = str(hint.get('action') or 'ANSWER').upper()
-    # A repeated-write request is intentionally routed through the existing
-    # idempotency check in app.py. It is not permission to create a second row.
     if action == 'CLARIFY' and hint.get('entity_status') == 'REPEAT' and isinstance(hint.get('tool_call'), dict):
         return 'TOOL'
     return action
@@ -46,12 +44,7 @@ def _expected_write():
 
 
 def _chat_common(self, query, user, conversation_id, tool_callback, system_prompt, stream=False):
-    """Run a bounded tool loop with server-verifiable execution state.
-
-    Tool exposure follows the deterministic planner. A lookup is not considered a
-    write, a planner intention is not considered a lookup, and a provider cannot
-    claim completion unless the backend tool path really executed/proposed it.
-    """
+    """Run a bounded tool loop with server-verifiable execution state."""
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
     seen_tool_calls = set()
     completed_commands = set()
@@ -88,6 +81,8 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             if force_final:
                 if not isinstance(provider_calls, list) or len(provider_calls) > 4:
                     raise _core.DifyUnavailable(f'{self.service_name}返回的工具调用过多。', 'bad_response')
+                message = dict(message)
+                message.setdefault('role', 'assistant')
                 messages.append(message)
                 code = 'ALREADY_EXECUTED' if executed or completed_commands else 'NO_PROGRESS'
                 text = '业务操作已经处理，不会重复执行，请直接给出最终结果。' if code == 'ALREADY_EXECUTED' else '工具调用没有新进展，请直接给出最终结果。'
@@ -104,9 +99,6 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             provider_calls = []
 
         calls = _core._planner_calls(message, provider_calls, force_final, not planner_fallback_used) if allow_tools else []
-        # Keep the deterministic fallback protocol explicit: if the provider
-        # returns prose instead of a required Tool Call, attach the synthetic call
-        # to the assistant message before appending its tool result.
         if allow_tools and not provider_calls and not calls and not planner_fallback_used:
             fallback = (_PLANNER_HINT.get() or {}).get('tool_call')
             if isinstance(fallback, dict):
@@ -121,8 +113,12 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
         if not provider_calls and calls:
             planner_fallback_used = True
             message = dict(message)
+            message['role'] = 'assistant'
             message['tool_calls'] = calls
             message['content'] = message.get('content') or None
+        elif provider_calls:
+            message = dict(message)
+            message.setdefault('role', 'assistant')
         if calls and tool_callback:
             if not isinstance(calls, list) or len(calls) > 4:
                 raise _core.DifyUnavailable(f'{self.service_name}返回的工具调用过多。', 'bad_response')
