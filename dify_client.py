@@ -45,7 +45,7 @@ _RESOLVER_ARGUMENTS = {
     'bill.search': {'bill_id', 'id', 'community_id', 'building_id', 'house_id', 'fee_item_id', 'status', 'month'},
     'payment.search': {'bill_id', 'status', 'id'},
     'billing.unpaid': {'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id', 'person_id', 'month', 'bill_id', 'id'},
-    'notice.read': {'community_id', 'building_id'},
+    'notice.read': {'community_id', 'building_id', 'building_name', 'building'},
     'whoami': set(),
 }
 
@@ -65,6 +65,11 @@ _PLANNER_OWNED_READ_FIELDS = {
     'bill.search': {'bill_id': ('bill_id', 'id')},
     'payment.search': {'id': ('id', 'payment_id'), 'bill_id': ('bill_id',)},
     'billing.unpaid': {'bill_id': ('bill_id',)},
+    'notice.read': {
+        'community_id': ('community_id',),
+        'building_id': ('building_id',),
+        'building_name': ('building_name', 'building'),
+    },
 }
 
 _RESOLVED_SINGLE_TARGET_INTENTS = {
