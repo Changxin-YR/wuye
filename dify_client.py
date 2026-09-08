@@ -38,7 +38,7 @@ _RESOLVER_ARGUMENTS = {
     'visitor.search': {'community_id', 'building_id', 'house_id', 'status', 'phone', 'name', 'id'},
     'vehicle.search': {'community_id', 'building_id', 'house_id', 'person_id', 'status', 'plate', 'id'},
     'parking.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
-    'parking_use.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
+    'parking_use.search': {'community_id', 'building_id', 'status', 'space_code', 'plate'},
     'device.search': {'community_id', 'building_id', 'status', 'category', 'code', 'name', 'id'},
     'inspection.search': {'community_id', 'building_id', 'device_id', 'assignee_id', 'status', 'id'},
     'fee.search': {'community_id', 'fee_item_id', 'name', 'id'},
@@ -119,10 +119,20 @@ def _parse_call_command(call):
 def _normalize_read_call(call):
     outer = _parse_call_args(call)
     command = outer.get('command')
-    if command not in _READ_ONLY_INTENTS or outer.get('operation') == 'lookup':
+    if command not in _READ_ONLY_INTENTS:
         return call
     outer = dict(outer)
     outer['operation'] = 'lookup'
+    if command == 'parking_use.search':
+        try:
+            params = json.loads(outer.get('arguments_json') or '{}')
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return call
+        if not isinstance(params, dict):
+            return call
+        allowed = _RESOLVER_ARGUMENTS['parking_use.search']
+        params = {key: value for key, value in params.items() if key in allowed and value not in (None, '')}
+        outer['arguments_json'] = json.dumps(params, ensure_ascii=False)
     safe = dict(call) if isinstance(call, dict) else call
     if not isinstance(safe, dict):
         return call
@@ -483,8 +493,11 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
         if allow_tools and resolve_multi:
             provider_calls = []
         elif allow_tools and resolve_first and not resolver_ready and provider_calls:
-            allowed_resolvers = {item for item in hint.get('candidates', ()) if item in _READ_ONLY_INTENTS}
-            provider_calls = [call for call in provider_calls if _parse_call_command(call) in allowed_resolvers]
+            if final_intent == 'parking.release':
+                provider_calls = []
+            else:
+                allowed_resolvers = {item for item in hint.get('candidates', ()) if item in _READ_ONLY_INTENTS}
+                provider_calls = [call for call in provider_calls if _parse_call_command(call) in allowed_resolvers]
         elif allow_tools and resolve_first and resolver_ready and resolved_item and provider_calls:
             filtered = []
             for call in provider_calls:
