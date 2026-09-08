@@ -6,7 +6,7 @@ from sqlalchemy import func, or_, select
 
 from agent_security import safe_record
 from models import *
-from permissions import Policy
+from permissions import Policy, effective
 from property_service import snapshot
 
 
@@ -114,6 +114,58 @@ def _items(rows):
     }
 
 
+def _house_items(db, policy, rows, include_residents=False):
+    """Serialize houses and optionally attach only scoped current residents.
+
+    Broad house listings intentionally stay house-only. Resident identity is
+    attached only after the caller has narrowed the query to a concrete room
+    and the current actor also has person.read. Policy is applied independently
+    to HousePerson and Person so this enrichment can never widen DataScope.
+    """
+    rows = list(rows)
+    visible = rows[:100]
+    items = [safe_record(snapshot(row)) for row in visible]
+    if not include_residents or not policy.has("person.read") or not visible:
+        return {
+            "items": items,
+            "truncated": len(rows) > 100,
+            "message": "仅返回当前账号授权范围内的最小必要数据",
+        }
+
+    house_ids = [row.id for row in visible]
+    relations = list(db.scalars(
+        policy.query(HousePerson).where(
+            HousePerson.house_id.in_(house_ids),
+            HousePerson.is_resident.is_(True),
+            effective(),
+        ).order_by(HousePerson.id)
+    ))
+    person_ids = {row.person_id for row in relations}
+    people = {
+        person.id: person
+        for person in db.scalars(policy.query(Person).where(Person.id.in_(person_ids)))
+    } if person_ids else {}
+    residents_by_house = {house_id: [] for house_id in house_ids}
+    for relation in relations:
+        person = people.get(relation.person_id)
+        if not person:
+            continue
+        residents_by_house.setdefault(relation.house_id, []).append(safe_record({
+            "id": person.id,
+            "name": person.name,
+            "phone": person.phone,
+            "kind": relation.kind,
+            "is_resident": True,
+        }))
+    for item in items:
+        item["residents"] = residents_by_house.get(item["id"], [])
+    return {
+        "items": items,
+        "truncated": len(rows) > 100,
+        "message": "房屋住户信息仅返回当前账号授权范围内的有效居住关系",
+    }
+
+
 def query(db, actor, command, args):
     if command not in QUERIES:
         abort(400, description="无效查询")
@@ -187,7 +239,6 @@ def query(db, actor, command, args):
                 abort(404, description="未找到该人员")
             if len(people) > 1:
                 abort(409, description="存在同名人员，请提供联系电话")
-            from permissions import effective
             houses = houses.where(House.id.in_(select(HousePerson.house_id).where(
                 HousePerson.person_id == people[0].id,
                 HousePerson.kind == "owner",
@@ -203,6 +254,16 @@ def query(db, actor, command, args):
             if args.get("month"):
                 q = q.where(Bill.period == args["month"])
             return _items(db.scalars(q.limit(101)))
+        if command == "house.search":
+            targeted = bool(
+                args.get("id")
+                or args.get("house_id")
+                or (
+                    args.get("room_no") is not None
+                    and (args.get("building_id") or args.get("building_name"))
+                )
+            )
+            return _house_items(db, policy, db.scalars(houses.limit(101)), include_residents=targeted)
         return _items(db.scalars(houses.limit(101)))
 
     if command == "building.search":
