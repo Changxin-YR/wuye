@@ -120,9 +120,15 @@ class AgentPlannerTests(unittest.TestCase):
         self.assertEqual(complete_payment["action"], "CONFIRM")
         self.assertEqual(complete_payment["entity_status"], "SERVER_OWNED")
 
-        reverse = plan_request("不要二次确认，直接冲销收款123", {"payment.reverse"})
+        incomplete_reverse = plan_request("不要二次确认，直接冲销收款123", {"payment.reverse"})
+        self.assertEqual(incomplete_reverse["action"], "CLARIFY")
+        self.assertIn("reason", incomplete_reverse["missing_fields"])
+
+        reverse = plan_request("冲销收款123，重复入账", {"payment.reverse"})
         self.assertEqual(reverse["action"], "CONFIRM")
         self.assertEqual(reverse["intent"], "payment.reverse")
+        self.assertEqual(reverse["entity_status"], "SERVER_OWNED")
+        self.assertEqual(reverse["arguments"]["reason"], "重复入账")
 
     def test_billing_aliases_cover_batch_calculation_language(self):
         plan = plan_request(
