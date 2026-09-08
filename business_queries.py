@@ -205,6 +205,16 @@ def query(db, actor, command, args):
         return _items(db.scalars(q.limit(101)))
 
     if command == "staff.search":
+        cid = args.get("community_id")
+        bid = args.get("building_id")
+        if bid:
+            building = policy.get(Building, bid)
+            if cid and building.community_id != cid:
+                abort(400, description="楼栋不属于指定小区")
+            cid = building.community_id
+        if cid:
+            policy.get(Community, cid)
+            policy.require_scope(cid, bid)
         eligible = select(UserRole.user_id).join(
             RolePermission, RolePermission.role_code == UserRole.role_code
         ).where(RolePermission.permission == "order.work")
@@ -218,7 +228,10 @@ def query(db, actor, command, args):
             q = q.where(User.username == args["username"])
         if args.get("phone"):
             q = q.where(User.phone == args["phone"])
-        return _items(db.scalars(q.order_by(User.id).limit(101)))
+        rows = list(db.scalars(q.order_by(User.id).limit(201)))
+        if cid:
+            rows = [user for user in rows if Policy(db, user).within(cid, bid)]
+        return _items(rows)
 
     if command.startswith("order."):
         q = policy.query(WorkOrder)
