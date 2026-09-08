@@ -245,6 +245,27 @@ def query(db, actor, command, args):
                 effective(),
             )))
         if command == "billing.unpaid":
+            person_targeted = any(args.get(key) not in (None, "") for key in ("person_id", "person_name", "phone"))
+            if person_targeted:
+                policy.require("person.read")
+                pq = policy.query(Person)
+                if args.get("person_id"):
+                    pq = pq.where(Person.id == args["person_id"])
+                if args.get("person_name"):
+                    pq = pq.where(Person.name == str(args["person_name"]).strip())
+                if args.get("phone"):
+                    pq = pq.where(Person.phone == str(args["phone"]).strip())
+                people = list(db.scalars(pq.order_by(Person.id).limit(2)))
+                if not people:
+                    abort(404, description="未找到该人员或该人员不在当前账号数据范围内")
+                if len(people) > 1:
+                    abort(409, description="存在同名或重复联系方式人员，请补充联系电话或更具体身份信息")
+                linked_houses = select(HousePerson.house_id).where(
+                    HousePerson.person_id == people[0].id,
+                    HousePerson.is_resident.is_(True),
+                    effective(),
+                )
+                houses = houses.where(House.id.in_(linked_houses))
             q = policy.query(Bill).where(
                 Bill.house_id.in_(houses.with_only_columns(House.id)),
                 Bill.status.in_(["unpaid", "partial"]),
