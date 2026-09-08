@@ -51,6 +51,13 @@ _RESOLVED_SINGLE_TARGET_INTENTS = {
     'payment.reverse', 'bill.void',
 }
 
+# Multi-entity writes are intentionally explicit. Each resolver is read-only,
+# scoped by the current actor, and must return exactly one row before the final
+# write can be synthesized. More flows can reuse this structure later.
+_MULTI_RESOLVE_SPECS = {
+    'visitor.create': ('person.search', 'house.search'),
+}
+
 
 def _planner_action():
     hint = _PLANNER_HINT.get() or {}
@@ -110,6 +117,46 @@ def _context_resolver_fallback():
     }
 
 
+def _multi_resolver_fallback(command):
+    """Build the next scoped lookup for a RESOLVE_MULTI plan.
+
+    Visitor contact data is deliberately not reused as host identity data. In
+    particular, the visitor's phone number never becomes a filter for
+    ``person.search``.
+    """
+    hint = _PLANNER_HINT.get() or {}
+    if hint.get('entity_status') != 'RESOLVE_MULTI':
+        return None
+    intent = hint.get('intent')
+    values = dict(hint.get('arguments') or {})
+    if intent != 'visitor.create':
+        return None
+    params = {}
+    if command == 'person.search':
+        if values.get('host_person_id'):
+            params['id'] = values['host_person_id']
+        elif values.get('person_name'):
+            params['person_name'] = values['person_name']
+        else:
+            return None
+    elif command == 'house.search':
+        if values.get('house_id'):
+            params['id'] = values['house_id']
+        else:
+            for key in ('building_name', 'unit', 'room_no'):
+                if values.get(key) not in (None, ''):
+                    params[key] = values[key]
+            if not params.get('building_name') or params.get('room_no') is None:
+                return None
+    else:
+        return None
+    return {
+        'operation': 'lookup',
+        'command': command,
+        'arguments_json': json.dumps(params, ensure_ascii=False),
+    }
+
+
 def _synthetic_call(args, call_id='planner-fallback'):
     return {
         'id': call_id,
@@ -138,7 +185,7 @@ def _resolver_items(result):
 
 
 def _narrow_resolver_result(result, item):
-    """Show the model only the server-selected row for an explicit latest reference."""
+    """Show the model only the server-selected row."""
     envelope = dict(result) if isinstance(result, dict) else {}
     if isinstance(envelope.get('items'), list):
         envelope['items'] = [item]
@@ -166,12 +213,7 @@ def _resolver_terminal_result(result, code, message):
 
 
 def _resolved_write_fallback(query, item):
-    """Build a mutation from the exact row selected by the scoped resolver.
-
-    Only single-target commands are handled here. Multi-entity commands such as
-    dispatch or parking assignment still require all of their independent
-    entities to be resolved before execution.
-    """
+    """Build a mutation from the exact row selected by a single resolver."""
     hint = _PLANNER_HINT.get() or {}
     intent = hint.get('intent')
     if intent not in _RESOLVED_SINGLE_TARGET_INTENTS or not isinstance(item, dict):
@@ -195,6 +237,34 @@ def _resolved_write_fallback(query, item):
     return {'operation': operation, 'command': intent, 'arguments_json': json.dumps(params, ensure_ascii=False)}
 
 
+def _multi_resolved_write_fallback(resolved):
+    """Build a write only from the exact rows selected by all required lookups."""
+    hint = _PLANNER_HINT.get() or {}
+    if hint.get('intent') != 'visitor.create':
+        return None
+    person = resolved.get('person.search') or {}
+    house = resolved.get('house.search') or {}
+    values = dict(hint.get('arguments') or {})
+    if person.get('id') is None or house.get('id') is None:
+        return None
+    required = ('visitor_name', 'phone', 'purpose', 'expected_at')
+    if any(values.get(key) in (None, '') for key in required):
+        return None
+    params = {
+        'house_id': person.get('_never_use_person_as_house', house['id']),
+        'host_person_id': person['id'],
+        'name': values['visitor_name'],
+        'phone': values['phone'],
+        'purpose': values['purpose'],
+        'expected_at': values['expected_at'],
+    }
+    return {
+        'operation': 'execute',
+        'command': 'visitor.create',
+        'arguments_json': json.dumps(params, ensure_ascii=False),
+    }
+
+
 def _call_matches_resolved_target(call, item):
     """Reject a provider mutation that changes the row chosen by the resolver."""
     if not isinstance(item, dict) or item.get('id') is None:
@@ -213,9 +283,10 @@ def _call_matches_resolved_target(call, item):
 def _chat_common(self, query, user, conversation_id, tool_callback, system_prompt, stream=False):
     """Run a bounded tool loop with server-verifiable execution state.
 
-    A RESOLVE_FIRST workflow is a hard state transition: before a scoped lookup
-    returns exactly one target, provider-supplied write calls are ignored. Once a
-    target is selected, subsequent mutation calls are bound to that exact row.
+    RESOLVE_FIRST binds one exact row before mutation. RESOLVE_MULTI resolves
+    every independently named business object in a server-owned sequence before
+    any write is allowed. Provider-supplied writes are ignored until resolution
+    completes, so the model cannot guess or switch identifiers.
     """
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
     hint = _PLANNER_HINT.get() or {}
@@ -245,8 +316,12 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
     resolved_item = None
     tools = self._tool_definition()
     resolve_first = hint.get('entity_status') == 'RESOLVE_FIRST'
+    resolve_multi = hint.get('entity_status') == 'RESOLVE_MULTI'
     resolve_strategy = (hint.get('arguments') or {}).get('_resolve_strategy')
     final_intent = hint.get('intent')
+    multi_commands = list(_MULTI_RESOLVE_SPECS.get(final_intent, ())) if resolve_multi else []
+    multi_index = 0
+    multi_resolved = {}
     for _ in range(6):
         payload = {'model': self.model, 'messages': messages, 'stream': stream}
         allow_tools = bool(tool_callback and not force_final and _core._tools_allowed())
@@ -289,7 +364,11 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             message['content'] = message.get('content') or '当前请求没有执行任何业务操作。'
             provider_calls = []
 
-        if allow_tools and resolve_first and not resolver_ready and provider_calls:
+        if allow_tools and resolve_multi:
+            # Multi-object writes are fully server-owned. Model tool calls are
+            # never trusted for target selection, even after one resolver passes.
+            provider_calls = []
+        elif allow_tools and resolve_first and not resolver_ready and provider_calls:
             allowed_resolvers = {
                 item for item in hint.get('candidates', ())
                 if item in _READ_ONLY_INTENTS
@@ -309,12 +388,22 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
         if provider_calls and not calls:
             provider_calls = []
         if allow_tools and not provider_calls and not calls:
-            if resolve_first and resolver_ready and resolved_item and not planner_fallback_used:
+            if resolve_multi:
+                if multi_index < len(multi_commands):
+                    resolver = _multi_resolver_fallback(multi_commands[multi_index])
+                    if isinstance(resolver, dict):
+                        calls = [_synthetic_call(resolver, f'planner-multi-resolver-{multi_index}')]
+                elif multi_commands and len(multi_resolved) == len(multi_commands) and not planner_fallback_used:
+                    resolved_fallback = _multi_resolved_write_fallback(multi_resolved)
+                    if isinstance(resolved_fallback, dict):
+                        calls = [_synthetic_call(resolved_fallback, 'planner-multi-write')]
+                        planner_fallback_used = True
+            elif resolve_first and resolver_ready and resolved_item and not planner_fallback_used:
                 resolved_fallback = _resolved_write_fallback(query, resolved_item)
                 if isinstance(resolved_fallback, dict):
                     calls = [_synthetic_call(resolved_fallback, 'planner-resolved-write')]
                     planner_fallback_used = True
-            if not calls:
+            if not calls and not resolve_multi:
                 fallback = hint.get('tool_call')
                 if isinstance(fallback, dict) and not planner_fallback_used and (not resolve_first or resolver_ready):
                     calls = [_synthetic_call(fallback)]
@@ -345,7 +434,29 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                         operation = args.get('operation')
                         if operation == 'lookup' and result.get('ok') is not False:
                             lookup_performed = True
-                            if resolve_first and command in _READ_ONLY_INTENTS:
+                            if resolve_multi and command in multi_commands:
+                                items = _resolver_items(result)
+                                if items is not None:
+                                    if len(items) == 1:
+                                        multi_resolved[command] = items[0]
+                                        result = _narrow_resolver_result(result, items[0])
+                                        if multi_index < len(multi_commands) and command == multi_commands[multi_index]:
+                                            multi_index += 1
+                                    elif len(items) == 0:
+                                        label = '住户' if command == 'person.search' else '房屋'
+                                        result = _resolver_terminal_result(
+                                            result, 'RESOURCE_NOT_FOUND',
+                                            f'在当前权限范围内没有找到对应{label}，请核对业务信息后再继续。',
+                                        )
+                                        force_final = True
+                                    else:
+                                        label = '住户' if command == 'person.search' else '房屋'
+                                        result = _resolver_terminal_result(
+                                            result, 'AMBIGUOUS_ENTITY',
+                                            f'找到多个可能的{label}，请补充更多信息确认具体对象后再继续。',
+                                        )
+                                        force_final = True
+                            elif resolve_first and command in _READ_ONLY_INTENTS:
                                 items = _resolver_items(result)
                                 if items is not None:
                                     if resolve_strategy == 'latest' and command == 'payment.search' and items:
