@@ -153,6 +153,44 @@ def _planner_owned_read_params(command):
     return params or None
 
 
+def _planner_read_fallback():
+    """Build one conservative lookup when the model omits a valid read Tool Call."""
+    hint = _PLANNER_HINT.get() or {}
+    if str(hint.get('action') or '').upper() != 'TOOL':
+        return None
+    command = str(hint.get('intent') or '')
+    if command not in _READ_ONLY_INTENTS:
+        return None
+    candidates = {item for item in hint.get('candidates', ()) if isinstance(item, str)}
+    if candidates and command not in candidates:
+        return None
+    owned = _planner_owned_read_params(command)
+    if owned is not None:
+        params = owned
+    else:
+        values = dict(hint.get('arguments') or {})
+        allowed = _RESOLVER_ARGUMENTS.get(command)
+        if allowed is None:
+            return None
+        params = {key: values[key] for key in allowed if values.get(key) not in (None, '')}
+        aliases = {
+            'complaint.search': {'id': ('complaint_id',)},
+            'visitor.search': {'name': ('visitor_name',)},
+            'device.search': {'code': ('device_code',)},
+            'fee.search': {'id': ('fee_item_id',)},
+            'payment.search': {'id': ('payment_id',)},
+        }
+        for output_key, source_keys in aliases.get(command, {}).items():
+            if output_key in params:
+                continue
+            for source_key in source_keys:
+                value = values.get(source_key)
+                if value not in (None, ''):
+                    params[output_key] = value
+                    break
+    return {'operation': 'lookup', 'command': command, 'arguments_json': json.dumps(params, ensure_ascii=False)}
+
+
 def _normalize_read_call(call):
     outer = _parse_call_args(call)
     command = outer.get('command')
@@ -572,6 +610,11 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                 resolved_fallback = _resolved_write_fallback(query, resolved_item)
                 if isinstance(resolved_fallback, dict):
                     calls = [_synthetic_call(resolved_fallback, 'planner-resolved-write')]
+                    planner_fallback_used = True
+            if not calls and not resolve_multi and not resolve_first and not planner_fallback_used:
+                read_fallback = _planner_read_fallback()
+                if isinstance(read_fallback, dict):
+                    calls = [_synthetic_call(read_fallback, 'planner-read-fallback')]
                     planner_fallback_used = True
             if not calls and not resolve_multi:
                 fallback = hint.get('tool_call')
