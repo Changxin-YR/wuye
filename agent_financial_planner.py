@@ -119,6 +119,30 @@ def _read_result(intent, authorized, values):
     }
 
 
+def repair_resident_directory_plan(text, result, authorized_commands):
+    """Keep broad resident identity reads behind person.read, never property.read."""
+    value = str(text or '').strip()
+    if not re.search(r'住户(?:信息|名单|列表|名册)|(?:查询|查|看看|看下|查一下|查下).{0,20}住户', value):
+        return result
+    values = dict(result.get('arguments') or {})
+    # A concrete room query is intentionally handled by the privacy-preserving
+    # targeted house lookup, which returns only residents of that one house.
+    if values.get('room_no') is not None:
+        return result
+    building_name = values.get('building_name') or values.get('building')
+    if not building_name:
+        matched = re.search(r'([A-Za-z0-9一二三四五六七八九十百]+)\s*(?:栋|号楼)', value)
+        if matched:
+            building_name = matched.group(1) + '栋'
+    if not building_name:
+        return result
+    read_values = {'building_name': building_name}
+    for key in ('community_id', 'building_id'):
+        if values.get(key) not in (None, ''):
+            read_values[key] = values[key]
+    return _read_result('person.search', set(authorized_commands or ()), read_values)
+
+
 def repair_read_plan(text, result, authorized_commands):
     """Repair common read phrases without changing RBAC/DataScope semantics."""
     value = str(text or '').strip()
@@ -229,6 +253,7 @@ def _result(intent, action, candidates, values, missing=None, status='RESOLVED')
 
 def repair_financial_plan(text, result, authorized_commands):
     """Turn financial writes into explicit-slot, server-resolved plans."""
+    result = repair_resident_directory_plan(text, result, authorized_commands)
     result = repair_read_plan(text, result, authorized_commands)
     authorized = set(authorized_commands or ())
     intent = result.get('intent')
