@@ -6,11 +6,13 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from werkzeug.security import generate_password_hash
 
 from app import create_app
 from database_fixture import test_database
+from dify_client import BailianClient
 from models import AiGrant, User, utcnow
 
 
@@ -108,8 +110,7 @@ class HouseResidentReadTests(unittest.TestCase):
         })['id']
         return building, unit, house
 
-    def test_targeted_house_read_returns_current_residents_with_masked_phone(self):
-        _, _, house = self.make_house()
+    def make_residents(self, house):
         owner = self.business('person.save', {
             'community_id': 1,
             'name': '王五',
@@ -136,6 +137,11 @@ class HouseResidentReadTests(unittest.TestCase):
             'kind': 'family',
             'is_resident': True,
         })
+        return owner, family
+
+    def test_targeted_house_read_returns_current_residents_with_masked_phone(self):
+        _, _, house = self.make_house()
+        self.make_residents(house)
         token = self.grant(1)
 
         result = self.lookup(token, 'house.search', {
@@ -184,6 +190,47 @@ class HouseResidentReadTests(unittest.TestCase):
         })
         self.assertEqual(result['items'][0]['residents'], [])
         self.assertTrue(relation['id'])
+
+    def test_ai_chat_fallback_reads_target_house_and_only_sends_masked_residents_upstream(self):
+        _, _, house = self.make_house()
+        self.make_residents(house)
+        client = BailianClient('http://agent.invalid', 'fixture-key', 'qwen-plus')
+        payloads = []
+        responses = iter([
+            {'id': 'one', 'choices': [{'message': {'content': '我来查一下'}}]},
+            {'id': 'two', 'choices': [{'message': {'content': '23栋311当前登记的居住人员是王五（业主）和赵六（家属）。'}}]},
+        ])
+
+        def fake_request(method, path, payload=None):
+            payloads.append(payload)
+            return next(responses)
+
+        self.app.extensions['dify'] = client
+        with patch.object(client, '_request', side_effect=fake_request):
+            response = self.client.post(
+                '/ai/chat',
+                json={'message': '查一下23栋3单元311是谁住的'},
+                headers={'X-CSRF-Token': self.csrf()},
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.json['source'], 'bailian')
+        self.assertEqual(response.json['actions'], [])
+        self.assertIn('王五', response.json['answer'])
+        self.assertIn('赵六', response.json['answer'])
+        self.assertEqual(len(payloads), 2)
+        tool_messages = [row for row in payloads[1]['messages'] if row.get('role') == 'tool']
+        self.assertEqual(len(tool_messages), 1)
+        upstream_tool_text = tool_messages[0]['content']
+        self.assertIn('王五', upstream_tool_text)
+        self.assertIn('赵六', upstream_tool_text)
+        self.assertIn('138****0123', upstream_tool_text)
+        self.assertIn('139****0456', upstream_tool_text)
+        self.assertNotIn('13800000123', upstream_tool_text)
+        self.assertNotIn('13900000456', upstream_tool_text)
+        self.assertNotIn('emergency_contact', upstream_tool_text)
+        self.assertNotIn('不应暴露', upstream_tool_text)
+        self.assertNotIn('也不应暴露', upstream_tool_text)
 
 
 if __name__ == '__main__':
