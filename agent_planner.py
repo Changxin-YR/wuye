@@ -1,15 +1,39 @@
 """Semantic compatibility layer around the stateful deterministic planner.
 
 The state machine and frozen planner remain in ``agent_planner_state`` and
-``agent_planner_core``.  This layer only repairs broad Chinese business phrases
-and identifier extraction; it never grants permissions or bypasses backend
-Policy/DataScope checks.
+``agent_planner_core``. This layer repairs broad Chinese business phrases and
+turns safe contextual references ("刚才那个", "上一笔") into scoped resolver
+workflows. It never grants permissions or bypasses backend Policy/DataScope.
 """
 import re
 
 from agent_planner_state import *
 from agent_planner_state import clear_pending_plan, plan_request as _state_plan_request
-from agent_planner_core import _candidates
+from agent_planner_core import CONFIRM_INTENTS, _candidates
+
+
+_CONTEXT_WORDS = re.compile(r'刚才|刚刚|这个|这个人|这个房|这个工单|这张单|上一笔|上一个|今天的|当前的|已经离开|可以进|进去了|处理结果|结案|返修|撤回')
+_CONTEXT_RESOLVERS = {
+    'order.assign': ('order.search', 'person.search'),
+    'order.accept': ('order.search',),
+    'order.progress': ('order.search',),
+    'order.finish': ('order.search',),
+    'order.reopen': ('order.search',),
+    'order.close': ('order.search',),
+    'order.cancel': ('order.search',),
+    'complaint.assign': ('complaint.search', 'person.search'),
+    'complaint.resolve': ('complaint.search',),
+    'complaint.close': ('complaint.search',),
+    'visitor.checkin': ('visitor.search',),
+    'visitor.checkout': ('visitor.search',),
+    'visitor.cancel': ('visitor.search',),
+    'vehicle.archive': ('vehicle.search',),
+    'parking.release': ('parking.search', 'vehicle.search'),
+    'device.archive': ('device.search',),
+    'inspection.complete': ('inspection.search', 'device.search'),
+    'payment.reverse': ('payment.search',),
+    'bill.void': ('billing.unpaid',),
+}
 
 
 def _repair_notice_content(text, result):
@@ -54,13 +78,7 @@ def _repair_payment_target(text, result, authorized_commands):
 
 
 def _repair_device_code(result):
-    """Keep device identifiers explicit and compatible with the current gateway.
-
-    ``app.py`` still has a conservative legacy builder that reads ``space_code``
-    for ``device.save``.  Preserve the canonical device fields and mirror the
-    value only for that builder; backend command normalization still rejects a
-    device id that does not resolve inside the actor's DataScope.
-    """
+    """Keep device identifiers explicit and compatible with the current gateway."""
     if result.get('intent') not in {'device.save', 'device.search', 'device.archive', 'inspection.create'}:
         return result
     arguments = dict(result.get('arguments') or {})
@@ -68,11 +86,59 @@ def _repair_device_code(result):
     if code:
         arguments['device_code'] = str(code).upper()
         arguments['code'] = str(code).upper()
+        # Legacy app.py builder currently reads space_code for device.save.
+        # Mirroring is compatibility only; the backend still validates the command.
         if result.get('intent') == 'device.save':
             arguments.setdefault('space_code', str(code).upper())
         result = dict(result)
         result['arguments'] = arguments
     return result
+
+
+def _smooth_context_resolution(text, result, authorized_commands):
+    """Prefer a scoped lookup over asking users for internal ids.
+
+    The provider receives only authorized resolver commands.  It must look up the
+    current business object first, continue only for a unique candidate and ask
+    for clarification when the lookup is empty/ambiguous.  Backend Policy and
+    DataScope remain the final authority.
+    """
+    if result.get('action') != 'CLARIFY':
+        return result
+    intent = result.get('intent')
+    resolvers = _CONTEXT_RESOLVERS.get(intent)
+    if not resolvers or not _CONTEXT_WORDS.search(text):
+        return result
+    authorized = set(authorized_commands or ())
+    candidates = [command for command in resolvers if command in authorized]
+    if intent in authorized:
+        candidates.append(intent)
+    if not candidates or intent not in candidates:
+        return result
+    arguments = dict(result.get('arguments') or {})
+    # Give the resolver a useful state hint without inventing an object id.
+    if intent == 'visitor.checkin':
+        arguments.setdefault('status', 'registered')
+    elif intent == 'visitor.checkout':
+        arguments.setdefault('status', 'inside')
+    elif intent == 'visitor.cancel':
+        arguments.setdefault('status', 'registered')
+    elif intent == 'inspection.complete':
+        arguments.setdefault('status', 'pending')
+    elif intent == 'complaint.resolve':
+        arguments.setdefault('status', 'open')
+    elif intent == 'complaint.close':
+        arguments.setdefault('status', 'resolved')
+    action = 'CONFIRM' if intent in CONFIRM_INTENTS else 'TOOL'
+    clear_pending_plan()
+    return {
+        'action': action,
+        'intent': intent,
+        'candidates': list(dict.fromkeys(candidates)),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_FIRST',
+        'arguments': arguments,
+    }
 
 
 def plan_request(message, authorized_commands, context=None):
@@ -86,4 +152,5 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_notice_content(text, result)
     result = _repair_payment_target(text, result, authorized_commands)
     result = _repair_device_code(result)
+    result = _smooth_context_resolution(text, result, authorized_commands)
     return result
