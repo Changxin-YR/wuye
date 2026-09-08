@@ -45,13 +45,21 @@ class DomainPlannerTests(unittest.TestCase):
             ('公共区域的照明坏了，建个工单', 'order.create', 'TOOL'),
             ('给23栋311绑定王五', 'relation.bind_by_name', 'TOOL'),
             ('登记A-002车位，位置在地库', 'parking.save', 'TOOL'),
-            ('给23栋生成这个月物业费账单', 'bill.batch', 'CONFIRM'),
-            ('生成A栋101的物业费账单', 'bill.create', 'CONFIRM'),
+            ('给23栋生成这个月物业费账单', 'bill.batch', 'CLARIFY'),
+            ('生成A栋101的物业费账单', 'bill.create', 'CLARIFY'),
             ('把账单123作废，住户已搬走', 'bill.void', 'CONFIRM'),
         ]
         for text, intent, action in cases:
             with self.subTest(text=text):
                 self.check(text, intent, action)
+
+    def test_financial_writes_only_confirm_after_business_facts_are_complete(self):
+        batch = self.check('给23栋生成这个月物业费账单，到期日2026-09-30', 'bill.batch', 'CONFIRM')
+        self.assertEqual(batch['entity_status'], 'RESOLVE_MULTI')
+        self.assertEqual(batch['arguments']['period'], '2026-09')
+        self.assertEqual(batch['arguments']['due_date'], '2026-09-30')
+        single = self.check('生成A栋101的2026-09物业费账单，到期日2026-09-30', 'bill.create', 'CONFIRM')
+        self.assertEqual(single['entity_status'], 'RESOLVE_MULTI')
 
     def test_missing_targets_use_safe_resolvers_before_asking_for_internal_ids(self):
         self.check('给P-01安排巡检', 'inspection.create', 'CLARIFY')
