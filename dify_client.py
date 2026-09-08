@@ -203,7 +203,10 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             }
             provider_calls = [call for call in provider_calls if _parse_call_command(call) in allowed_resolvers]
 
-        calls = _core._planner_calls(message, provider_calls, force_final, not planner_fallback_used) if allow_tools else []
+        # The wrapper owns fallback synthesis. Core fallback is disabled here so
+        # a normal plan cannot be replayed twice and RESOLVE_FIRST cannot skip
+        # its scoped resolver by synthesizing the final mutation too early.
+        calls = _core._planner_calls(message, provider_calls, force_final, False) if allow_tools else []
         if allow_tools and not provider_calls and not calls:
             fallback = (_PLANNER_HINT.get() or {}).get('tool_call')
             if isinstance(fallback, dict) and not planner_fallback_used and (not resolve_first or resolver_ready):
