@@ -33,6 +33,32 @@ QUERIES = {
 }
 
 
+def _building_aliases(value):
+    """Return equivalent spoken/persisted building labels without widening scope."""
+    raw = str(value or "").strip()
+    if not raw:
+        return set()
+    from agent_planner import building_name_variants
+    variants = set(building_name_variants(raw))
+    core = raw
+    for suffix in ("号楼", "栋"):
+        if core.endswith(suffix):
+            core = core[:-len(suffix)].strip()
+            break
+    if core:
+        variants.update({core, core + "栋", core + "号楼"})
+    return {item for item in variants if item}
+
+
+def _unit_aliases(value):
+    """Treat `3` and `3单元` as equivalent business labels."""
+    raw = str(value or "").strip()
+    if not raw:
+        return set()
+    core = raw[:-2].strip() if raw.endswith("单元") else raw
+    return {item for item in {raw, core, core + "单元" if core else ""} if item}
+
+
 def _clean_args(command, args):
     if not isinstance(args, dict):
         abort(400, description="无效查询参数")
@@ -99,9 +125,14 @@ def query(db, actor, command, args):
             houses = houses.where(House.id == args["house_id"])
         if args.get("building_id"):
             houses = houses.where(House.building_id == args["building_id"])
-        for key in ("community_id", "building_name", "unit", "room_no"):
-            if args.get(key):
-                houses = houses.where(getattr(House, key) == args[key])
+        if args.get("community_id"):
+            houses = houses.where(House.community_id == args["community_id"])
+        if args.get("building_name"):
+            houses = houses.where(House.building_name.in_(_building_aliases(args["building_name"])))
+        if args.get("unit"):
+            houses = houses.where(House.unit.in_(_unit_aliases(args["unit"])))
+        if args.get("room_no"):
+            houses = houses.where(House.room_no == args["room_no"])
         if command == "person.properties":
             person_id = args.get("person_id")
             name = str(args.get("person_name", "")).strip()
@@ -143,8 +174,7 @@ def query(db, actor, command, args):
             q = q.where(Building.community_id == args["community_id"])
         name = args.get("name") or args.get("building_name") or args.get("building")
         if name:
-            from agent_planner import building_name_variants
-            q = q.where(Building.name.in_(building_name_variants(str(name))))
+            q = q.where(Building.name.in_(_building_aliases(name)))
         return _items(db.scalars(q.limit(101)))
 
     if command == "unit.search":
@@ -155,7 +185,7 @@ def query(db, actor, command, args):
             q = q.where(PropertyUnit.building_id == args["building_id"])
         name = args.get("name") or args.get("unit") or args.get("unit_name")
         if name:
-            q = q.where(PropertyUnit.name == str(name).removesuffix("单元"))
+            q = q.where(PropertyUnit.name.in_(_unit_aliases(name)))
         return _items(db.scalars(q.limit(101)))
 
     if command == "person.search":
