@@ -211,9 +211,20 @@ class ResolverFallbackTests(unittest.TestCase):
         self.assertEqual([item['command'] for item in callbacks], ['payment.search', 'payment.reverse'])
         self.assertNotIn('999', json.dumps(callbacks, ensure_ascii=False))
         self.assertEqual(result['execution_state'], 'PENDING_CONFIRMATION')
-        second_messages = json.dumps(payloads[1]['messages'], ensure_ascii=False)
-        self.assertIn('"id": 12', second_messages)
-        self.assertNotIn('"id": 11', second_messages)
+        resolver_tool = next(
+            item for item in payloads[1]['messages']
+            if item.get('role') == 'tool' and item.get('tool_call_id') == 'planner-resolver'
+        )
+        resolver_payload = json.loads(resolver_tool['content'])
+        self.assertEqual([item['id'] for item in resolver_payload['data']['items']], [12])
+        resolved_write = next(
+            item for item in payloads[1]['messages']
+            if item.get('role') == 'assistant' and item.get('tool_calls')
+            and item['tool_calls'][0].get('id') == 'planner-resolved-write'
+        )
+        outer = json.loads(resolved_write['tool_calls'][0]['function']['arguments'])
+        params = json.loads(outer['arguments_json'])
+        self.assertEqual((params['id'], params['version']), (12, 3))
 
     def test_ambiguous_resolver_result_stops_before_write(self):
         client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
