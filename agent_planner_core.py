@@ -12,7 +12,7 @@ READ_COMMANDS = {
     'house.search', 'building.search', 'unit.search', 'person.search', 'person.properties',
     'order.search', 'order.pending', 'complaint.search', 'complaint.stats', 'visitor.search',
     'vehicle.search', 'parking.search', 'parking_use.search', 'device.search', 'inspection.search', 'fee.search',
-    'payment.search', 'billing.unpaid', 'notice.read', 'whoami'
+    'bill.search', 'payment.search', 'billing.unpaid', 'notice.read', 'whoami'
 }
 
 CONFIRM_INTENTS = {
@@ -217,6 +217,8 @@ def _detect_intent(text):
         return 'bill.create'
     if re.search(r'生成.*物业费账单', text):
         return 'bill.batch'
+    if re.search(r'(?:查询|查看|看看|查一下|查下|看下|详情|状态).*?账单\s*#?\s*\d+|账单\s*#?\s*\d+.*(?:查询|查看|看看|详情|状态|是什么)', text):
+        return 'bill.search'
     if re.search(r'欠费|没收|未收|查询.*账单|住户账单|物业费.*还有多少', text):
         return 'billing.unpaid'
     if re.search(r'当前是什么岗位|什么岗位|我的权限|我是谁', text):
