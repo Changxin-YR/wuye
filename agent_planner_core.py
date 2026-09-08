@@ -277,6 +277,8 @@ def _entities(message):
     unit = re.search(r'([0-9一二三四五六七八九十百]+)\s*单元', message)
     room = re.search(r'(?:单元\s*)?([0-9]{2,4})\s*(?:房|室)', message)
     if not room:
+        room = re.search(r'单元\s*([0-9]{2,4})(?!\d)', message)
+    if not room:
         room = re.search(r'(?:栋|号楼)\s*([0-9]{2,4})(?!\d)', message)
     phone = re.search(r'1[3-9]\d{9}', message)
     plate = re.search(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5}', message, re.I)
