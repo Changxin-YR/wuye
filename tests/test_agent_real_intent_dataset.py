@@ -11,9 +11,11 @@ CANONICAL = {
     'device.lookup': 'device.search',
 }
 # Historical acceptance row 68 described a read request ("查一下...") but was
-# accidentally labelled visitor.create/CLARIFY. Keep the fixture immutable for
-# audit history and apply the documented semantic correction here.
-CASE_INTENT_CORRECTIONS = {68: 'visitor.search'}
+# accidentally labelled visitor.create/CLARIFY. Row 98 asks for resident
+# identities for a whole building, which belongs to person.read/person.search,
+# not property.read/house.search. Keep the fixture immutable for audit history
+# and apply the documented semantic corrections here.
+CASE_INTENT_CORRECTIONS = {68: 'visitor.search', 98: 'person.search'}
 
 
 class RealIntentDatasetTests(unittest.TestCase):
@@ -58,6 +60,12 @@ class RealIntentDatasetTests(unittest.TestCase):
         case = next(item for item in self.cases if item['id'] == 68)
         result = plan_request(case['input'], self.authorized, self.context)
         self.assertEqual((result['intent'], result['action']), ('visitor.search', 'TOOL'))
+
+    def test_building_resident_directory_uses_person_read_semantics(self):
+        case = next(item for item in self.cases if item['id'] == 98)
+        result = plan_request(case['input'], self.authorized, self.context)
+        self.assertEqual((result['intent'], result['action']), ('person.search', 'TOOL'))
+        self.assertEqual(result['arguments'].get('building_name'), '23栋')
 
 
 if __name__ == '__main__':
