@@ -12,7 +12,7 @@ from agent_planner_state import clear_pending_plan, plan_request as _state_plan_
 from agent_planner_core import CONFIRM_INTENTS, _candidates
 
 
-_CONTEXT_WORDS = re.compile(r'刚才|刚刚|这个|这个人|这个房|这个工单|这张单|上一笔|上一个|今天的|当前的|已经离开|可以进|进去了|处理结果|结案|返修|撤回')
+_CONTEXT_WORDS = re.compile(r'刚才|刚刚|这个|这个人|这个房|这个工单|这张单|上一笔|上一个|今天的|当前的|已经离开|已经报废|可以进|进去了|处理结果|回访|结案|返修|撤回')
 _CONTEXT_RESOLVERS = {
     'order.assign': ('order.search', 'person.search'),
     'order.accept': ('order.search',),
@@ -125,8 +125,6 @@ def _smooth_context_resolution(text, result, authorized_commands):
         return result
     authorized = set(authorized_commands or ())
     resolver_candidates = [command for command in resolvers if command in authorized]
-    # Smooth auto-resolution is allowed only when the actor can actually perform
-    # at least one scoped read resolver and the final intent itself is authorized.
     if not resolver_candidates or intent not in authorized:
         return result
     candidates = resolver_candidates + [intent]
@@ -143,6 +141,8 @@ def _smooth_context_resolution(text, result, authorized_commands):
         arguments.setdefault('status', 'open')
     elif intent == 'complaint.close':
         arguments.setdefault('status', 'resolved')
+    elif intent == 'device.archive' and '报废' in text:
+        arguments.setdefault('status', 'retired')
     action = 'CONFIRM' if intent in CONFIRM_INTENTS else 'TOOL'
     clear_pending_plan()
     return {
