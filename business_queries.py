@@ -30,6 +30,7 @@ QUERIES = {
     "visitor.search": "visitor.read",
     "vehicle.search": "vehicle.read",
     "parking.search": "parking.read",
+    "parking_use.search": "parking.read",
     "device.search": "device.read",
     "inspection.search": "inspection.read",
     "fee.search": "billing.read",
@@ -88,7 +89,7 @@ def _clean_args(command, args):
         args["code"] = args.pop("q")
     if command == "vehicle.search" and "plate" not in args and "q" in args:
         args["plate"] = args.pop("q")
-    if command == "parking.search" and "space_code" not in args and "q" in args:
+    if command in {"parking.search", "parking_use.search"} and "space_code" not in args and "q" in args:
         args["space_code"] = args.pop("q")
     allowed = {
         "community_id", "building_id", "building_name", "building", "unit_id", "unit", "unit_name",
@@ -302,6 +303,21 @@ def query(db, actor, command, args):
             active_space_ids = select(ParkingUse.space_id).where(ParkingUse.vehicle_id.in_(vehicle_ids), ParkingUse.status == "active")
             spaces = spaces.where(ParkingSpace.id.in_(active_space_ids))
         return _items(db.scalars(spaces.limit(101)))
+
+    if command == "parking_use.search":
+        uses = policy.query(ParkingUse)
+        if args.get("id"):
+            uses = uses.where(ParkingUse.id == args["id"])
+        for key in ("community_id", "building_id", "status"):
+            if args.get(key):
+                uses = uses.where(getattr(ParkingUse, key) == args[key])
+        if args.get("space_code"):
+            space_ids = select(ParkingSpace.id).where(ParkingSpace.code == args["space_code"])
+            uses = uses.where(ParkingUse.space_id.in_(space_ids))
+        if args.get("plate"):
+            vehicle_ids = select(Vehicle.id).where(Vehicle.plate == str(args["plate"]).upper().replace(" ", ""))
+            uses = uses.where(ParkingUse.vehicle_id.in_(vehicle_ids))
+        return _items(db.scalars(uses.order_by(ParkingUse.id.desc()).limit(101)))
 
     if command == "device.search":
         q = policy.query(Device)
