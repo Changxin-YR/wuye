@@ -19,7 +19,7 @@ _READ_ONLY_INTENTS = {
     'house.search', 'building.search', 'unit.search', 'person.search', 'person.properties',
     'staff.search', 'complaint_staff.search', 'inspection_staff.search',
     'order.search', 'order.pending', 'complaint.search', 'complaint.stats', 'visitor.search',
-    'vehicle.search', 'parking.search', 'device.search', 'inspection.search', 'fee.search',
+    'vehicle.search', 'parking.search', 'parking_use.search', 'device.search', 'inspection.search', 'fee.search',
     'payment.search', 'billing.unpaid', 'notice.read', 'whoami',
 }
 
@@ -38,6 +38,7 @@ _RESOLVER_ARGUMENTS = {
     'visitor.search': {'community_id', 'building_id', 'house_id', 'status', 'phone', 'name', 'id'},
     'vehicle.search': {'community_id', 'building_id', 'house_id', 'person_id', 'status', 'plate', 'id'},
     'parking.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
+    'parking_use.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
     'device.search': {'community_id', 'building_id', 'status', 'category', 'code', 'name', 'id'},
     'inspection.search': {'community_id', 'building_id', 'device_id', 'assignee_id', 'status', 'id'},
     'fee.search': {'community_id', 'fee_item_id', 'name', 'id'},
@@ -51,7 +52,7 @@ _RESOLVED_SINGLE_TARGET_INTENTS = {
     'order.accept', 'order.progress', 'order.finish', 'order.reopen', 'order.close', 'order.cancel',
     'complaint.resolve', 'complaint.close',
     'visitor.checkin', 'visitor.checkout', 'visitor.cancel',
-    'vehicle.archive', 'device.archive', 'inspection.complete',
+    'vehicle.archive', 'parking.release', 'device.archive', 'inspection.complete',
     'payment.reverse', 'bill.void',
 }
 
@@ -317,6 +318,11 @@ def _resolved_write_fallback(query, item):
         params['remark'] = text
     elif intent in {'complaint.resolve', 'complaint.close'}:
         params['resolution'] = text
+    elif intent == 'parking.release':
+        reason = str((hint.get('arguments') or {}).get('reason') or '').strip()
+        if not reason:
+            return None
+        params['reason'] = reason
     elif intent in {'vehicle.archive', 'device.archive', 'payment.reverse', 'bill.void'}:
         params['reason'] = text
     elif intent == 'inspection.complete':
@@ -484,6 +490,8 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             for call in provider_calls:
                 command = _parse_call_command(call)
                 if command in _READ_ONLY_INTENTS:
+                    continue
+                if final_intent == 'parking.release':
                     continue
                 if command == final_intent and _call_matches_resolved_target(call, resolved_item):
                     filtered.append(call)
