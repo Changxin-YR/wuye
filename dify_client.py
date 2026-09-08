@@ -64,13 +64,17 @@ def _expected_write():
     return isinstance(fallback, dict) and fallback.get('operation') in {'execute', 'propose'}
 
 
-def _context_resolver_fallback():
-    """Build one read-only resolver call for a RESOLVE_FIRST plan.
+def _parse_call_command(call):
+    try:
+        function = call.get('function') or {}
+        arguments = json.loads(function.get('arguments') or '{}')
+        return arguments.get('command') if isinstance(arguments, dict) else None
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
-    This never invents ids and never upgrades authority. The candidate list has
-    already been intersected with the logged-in user's server-side capabilities;
-    the backend query performs Policy/DataScope checks again.
-    """
+
+def _context_resolver_fallback():
+    """Build one read-only resolver call for a RESOLVE_FIRST plan."""
     hint = _PLANNER_HINT.get() or {}
     if hint.get('entity_status') != 'RESOLVE_FIRST':
         return None
@@ -81,7 +85,6 @@ def _context_resolver_fallback():
     values = dict(hint.get('arguments') or {})
     allowed = _RESOLVER_ARGUMENTS.get(command, set())
     params = {key: value for key, value in values.items() if key in allowed and value not in (None, '')}
-    # Normalize planner-side business aliases to resolver field names.
     if command == 'device.search' and 'code' not in params and values.get('device_code'):
         params['code'] = values['device_code']
     if command == 'visitor.search' and 'name' not in params and values.get('visitor_name'):
@@ -106,8 +109,35 @@ def _synthetic_call(args, call_id='planner-fallback'):
     }
 
 
+def _resolver_items(result):
+    """Extract model-safe resolver items from either raw or structured envelopes."""
+    if not isinstance(result, dict):
+        return None
+    data = result.get('data')
+    if isinstance(data, dict) and isinstance(data.get('items'), list):
+        return data['items']
+    if isinstance(result.get('items'), list):
+        return result['items']
+    if isinstance(data, dict):
+        nested = data.get('data')
+        if isinstance(nested, dict) and isinstance(nested.get('items'), list):
+            return nested['items']
+    return None
+
+
+def _resolver_terminal_result(result, code, message):
+    envelope = dict(result) if isinstance(result, dict) else {}
+    envelope.update({'ok': False, 'code': code, 'message': message, 'terminal': True})
+    return envelope
+
+
 def _chat_common(self, query, user, conversation_id, tool_callback, system_prompt, stream=False):
-    """Run a bounded tool loop with server-verifiable execution state."""
+    """Run a bounded tool loop with server-verifiable execution state.
+
+    A RESOLVE_FIRST workflow is a hard state transition: before a scoped lookup
+    returns exactly one target, provider-supplied write calls are ignored. This
+    prevents a model from guessing an in-scope id and mutating the wrong record.
+    """
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
     seen_tool_calls = set()
     completed_commands = set()
@@ -119,7 +149,9 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
     pending = False
     executed = False
     lookup_performed = False
+    resolver_ready = False
     tools = self._tool_definition()
+    resolve_first = (_PLANNER_HINT.get() or {}).get('entity_status') == 'RESOLVE_FIRST'
     for _ in range(6):
         payload = {'model': self.model, 'messages': messages, 'stream': stream}
         allow_tools = bool(tool_callback and not force_final and _core._tools_allowed())
@@ -162,13 +194,22 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             message['content'] = message.get('content') or '当前请求没有执行任何业务操作。'
             provider_calls = []
 
+        # Hard resolver gate: before a unique read result exists, ignore any
+        # provider attempt to jump directly to the mutation command.
+        if allow_tools and resolve_first and not resolver_ready and provider_calls:
+            allowed_resolvers = {
+                item for item in (_PLANNER_HINT.get() or {}).get('candidates', ())
+                if item in _READ_ONLY_INTENTS
+            }
+            provider_calls = [call for call in provider_calls if _parse_call_command(call) in allowed_resolvers]
+
         calls = _core._planner_calls(message, provider_calls, force_final, not planner_fallback_used) if allow_tools else []
         if allow_tools and not provider_calls and not calls:
             fallback = (_PLANNER_HINT.get() or {}).get('tool_call')
-            if isinstance(fallback, dict) and not planner_fallback_used:
+            if isinstance(fallback, dict) and not planner_fallback_used and (not resolve_first or resolver_ready):
                 calls = [_synthetic_call(fallback)]
                 planner_fallback_used = True
-            elif not resolver_fallback_used:
+            elif resolve_first and not resolver_ready and not resolver_fallback_used:
                 resolver = _context_resolver_fallback()
                 if isinstance(resolver, dict):
                     calls = [_synthetic_call(resolver, 'planner-resolver')]
@@ -180,6 +221,7 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             message['content'] = message.get('content') or None
         elif provider_calls:
             message = dict(message)
+            message['tool_calls'] = provider_calls
             message.setdefault('role', 'assistant')
         if calls and tool_callback:
             if not isinstance(calls, list) or len(calls) > 4:
@@ -193,6 +235,23 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                         operation = args.get('operation')
                         if operation == 'lookup' and result.get('ok') is not False:
                             lookup_performed = True
+                            if resolve_first and command in _READ_ONLY_INTENTS:
+                                items = _resolver_items(result)
+                                if items is not None:
+                                    if len(items) == 1:
+                                        resolver_ready = True
+                                    elif len(items) == 0:
+                                        result = _resolver_terminal_result(
+                                            result, 'RESOURCE_NOT_FOUND',
+                                            '在当前权限范围内没有找到可继续操作的对象，请确认业务对象后再试。',
+                                        )
+                                        force_final = True
+                                    else:
+                                        result = _resolver_terminal_result(
+                                            result, 'AMBIGUOUS_ENTITY',
+                                            '找到多个可能的业务对象，请根据返回的候选信息确认具体对象后再继续。',
+                                        )
+                                        force_final = True
                         if operation == 'execute' and result.get('ok') is not False and result.get('terminal'):
                             executed = True
                         if operation == 'propose' and result.get('code') == 'CONFIRMATION_REQUIRED':
