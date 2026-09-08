@@ -16,7 +16,7 @@ _planner_calls = _core._planner_calls
 _safe_final_answer = _core._safe_final_answer
 
 _READ_ONLY_INTENTS = {
-    'house.search', 'building.search', 'unit.search', 'person.search', 'person.properties',
+    'house.search', 'building.search', 'unit.search', 'person.search', 'person.properties', 'staff.search',
     'order.search', 'order.pending', 'complaint.search', 'complaint.stats', 'visitor.search',
     'vehicle.search', 'parking.search', 'device.search', 'inspection.search', 'fee.search',
     'payment.search', 'billing.unpaid', 'notice.read', 'whoami',
@@ -28,6 +28,7 @@ _RESOLVER_ARGUMENTS = {
     'unit.search': {'building_id', 'unit_id', 'unit', 'unit_name', 'name', 'id'},
     'person.search': {'person_id', 'person_name', 'phone', 'id'},
     'person.properties': {'person_id', 'person_name', 'phone', 'id'},
+    'staff.search': {'staff_name', 'username', 'phone', 'community_id', 'building_id', 'id'},
     'order.search': {'order_no', 'status', 'q', 'id'},
     'order.pending': {'order_no', 'status', 'q', 'id'},
     'complaint.search': {'community_id', 'building_id', 'house_id', 'status', 'q', 'id'},
@@ -53,6 +54,14 @@ _RESOLVED_SINGLE_TARGET_INTENTS = {
 
 _MULTI_RESOLVE_SPECS = {
     'visitor.create': ('person.search', 'house.search'),
+    'order.assign': ('order.search', 'staff.search'),
+}
+
+_RESOLVER_LABELS = {
+    'person.search': '住户',
+    'house.search': '房屋',
+    'order.search': '工单',
+    'staff.search': '维修人员',
 }
 
 
@@ -137,37 +146,58 @@ def _context_resolver_fallback():
     return {'operation': 'lookup', 'command': command, 'arguments_json': json.dumps(params, ensure_ascii=False)}
 
 
-def _multi_resolver_fallback(command):
-    """Build the next scoped lookup for a RESOLVE_MULTI plan.
+def _multi_resolver_fallback(command, resolved=None):
+    """Build the next server-owned lookup for a RESOLVE_MULTI plan.
 
-    Visitor contact data is deliberately not reused as host identity data. In
-    particular, the visitor's phone number never becomes a filter for
-    ``person.search``.
+    Every internal identifier used by the final mutation must come from a
+    scoped lookup result. Provider-supplied IDs are deliberately ignored.
     """
     hint = _PLANNER_HINT.get() or {}
     if hint.get('entity_status') != 'RESOLVE_MULTI':
         return None
     intent = hint.get('intent')
     values = dict(hint.get('arguments') or {})
-    if intent != 'visitor.create':
-        return None
+    resolved = resolved or {}
     params = {}
-    if command == 'person.search':
-        if values.get('host_person_id'):
-            params['id'] = values['host_person_id']
-        elif values.get('person_name'):
-            params['person_name'] = values['person_name']
+    if intent == 'visitor.create':
+        if command == 'person.search':
+            if values.get('host_person_id'):
+                params['id'] = values['host_person_id']
+            elif values.get('person_name'):
+                params['person_name'] = values['person_name']
+            else:
+                return None
+        elif command == 'house.search':
+            if values.get('house_id'):
+                params['id'] = values['house_id']
+            else:
+                for key in ('building_name', 'unit', 'room_no'):
+                    if values.get(key) not in (None, ''):
+                        params[key] = values[key]
+                if not params.get('building_name') or params.get('room_no') is None:
+                    return None
         else:
             return None
-    elif command == 'house.search':
-        if values.get('house_id'):
-            params['id'] = values['house_id']
-        else:
-            for key in ('building_name', 'unit', 'room_no'):
-                if values.get(key) not in (None, ''):
-                    params[key] = values[key]
-            if not params.get('building_name') or params.get('room_no') is None:
+    elif intent == 'order.assign':
+        if command == 'order.search':
+            if values.get('order_id'):
+                params['id'] = values['order_id']
+            elif values.get('order_no'):
+                params['order_no'] = values['order_no']
+            else:
                 return None
+        elif command == 'staff.search':
+            repairer_name = values.get('repairer_name')
+            if not repairer_name:
+                return None
+            params['staff_name'] = repairer_name
+            order = resolved.get('order.search') or {}
+            if order.get('community_id') is not None:
+                params['community_id'] = order['community_id']
+            if order.get('building_id') is not None:
+                params['building_id'] = order['building_id']
+        else:
+            return None
     else:
         return None
     return {'operation': 'lookup', 'command': command, 'arguments_json': json.dumps(params, ensure_ascii=False)}
@@ -248,27 +278,35 @@ def _resolved_write_fallback(query, item):
 
 
 def _multi_resolved_write_fallback(resolved):
-    """Build a write only from the exact rows selected by all required lookups."""
+    """Build a mutation exclusively from exact rows selected by all lookups."""
     hint = _PLANNER_HINT.get() or {}
-    if hint.get('intent') != 'visitor.create':
-        return None
-    person = resolved.get('person.search') or {}
-    house = resolved.get('house.search') or {}
+    intent = hint.get('intent')
     values = dict(hint.get('arguments') or {})
-    if person.get('id') is None or house.get('id') is None:
-        return None
-    required = ('visitor_name', 'phone', 'purpose', 'expected_at')
-    if any(values.get(key) in (None, '') for key in required):
-        return None
-    params = {
-        'house_id': house['id'],
-        'host_person_id': person['id'],
-        'name': values['visitor_name'],
-        'phone': values['phone'],
-        'purpose': values['purpose'],
-        'expected_at': values['expected_at'],
-    }
-    return {'operation': 'execute', 'command': 'visitor.create', 'arguments_json': json.dumps(params, ensure_ascii=False)}
+    if intent == 'visitor.create':
+        person = resolved.get('person.search') or {}
+        house = resolved.get('house.search') or {}
+        if person.get('id') is None or house.get('id') is None:
+            return None
+        required = ('visitor_name', 'phone', 'purpose', 'expected_at')
+        if any(values.get(key) in (None, '') for key in required):
+            return None
+        params = {
+            'house_id': house['id'],
+            'host_person_id': person['id'],
+            'name': values['visitor_name'],
+            'phone': values['phone'],
+            'purpose': values['purpose'],
+            'expected_at': values['expected_at'],
+        }
+        return {'operation': 'execute', 'command': 'visitor.create', 'arguments_json': json.dumps(params, ensure_ascii=False)}
+    if intent == 'order.assign':
+        order = resolved.get('order.search') or {}
+        repairer = resolved.get('staff.search') or {}
+        if order.get('id') is None or order.get('version') is None or repairer.get('id') is None:
+            return None
+        params = {'id': order['id'], 'version': order['version'], 'repairer_id': repairer['id']}
+        return {'operation': 'execute', 'command': 'order.assign', 'arguments_json': json.dumps(params, ensure_ascii=False)}
+    return None
 
 
 def _call_matches_resolved_target(call, item):
@@ -388,7 +426,7 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
         if allow_tools and not provider_calls and not calls:
             if resolve_multi:
                 if multi_index < len(multi_commands):
-                    resolver = _multi_resolver_fallback(multi_commands[multi_index])
+                    resolver = _multi_resolver_fallback(multi_commands[multi_index], multi_resolved)
                     if isinstance(resolver, dict):
                         calls = [_synthetic_call(resolver, f'planner-multi-resolver-{multi_index}')]
                 elif multi_commands and len(multi_resolved) == len(multi_commands) and not planner_fallback_used:
@@ -443,11 +481,11 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                                         if multi_index < len(multi_commands) and command == multi_commands[multi_index]:
                                             multi_index += 1
                                     elif len(items) == 0:
-                                        label = '住户' if command == 'person.search' else '房屋'
+                                        label = _RESOLVER_LABELS.get(command, '业务对象')
                                         result = _resolver_terminal_result(result, 'RESOURCE_NOT_FOUND', f'在当前权限范围内没有找到对应{label}，请核对业务信息后再继续。')
                                         force_final = True
                                     else:
-                                        label = '住户' if command == 'person.search' else '房屋'
+                                        label = _RESOLVER_LABELS.get(command, '业务对象')
                                         result = _resolver_terminal_result(result, 'AMBIGUOUS_ENTITY', f'找到多个可能的{label}，请补充更多信息确认具体对象后再继续。')
                                         force_final = True
                             elif resolve_first and command in _READ_ONLY_INTENTS:
