@@ -28,31 +28,61 @@ class ReadOnlyOperationGuardTests(unittest.TestCase):
                     self.assertEqual(args['command'], command)
                     self.assertEqual(args['operation'], 'lookup')
 
-    def test_explicit_bill_lookup_target_is_owned_by_planner(self):
+    def test_explicit_read_targets_are_owned_by_planner(self):
+        cases = [
+            ('order.search', {'order_no': 'WO-2026-001'}, {'order_no': 'WO-EVIL'}, {'order_no': 'WO-2026-001'}),
+            ('complaint.search', {'id': 123}, {'id': 999, 'status': 'open'}, {'id': 123}),
+            ('visitor.search', {'id': 23}, {'id': 999, 'phone': '13800000000'}, {'id': 23}),
+            ('vehicle.search', {'plate': '粤A12345'}, {'plate': '粤B99999', 'status': 'active'}, {'plate': '粤A12345'}),
+            ('parking.search', {'space_code': 'A-001'}, {'space_code': 'B-999', 'status': 'free'}, {'space_code': 'A-001'}),
+            ('parking_use.search', {'id': 12}, {'id': 999, 'status': 'active'}, {'id': 12}),
+            ('device.search', {'code': 'P-01'}, {'code': 'P-99', 'status': 'normal'}, {'code': 'P-01'}),
+            ('inspection.search', {'id': 78}, {'id': 999, 'status': 'pending'}, {'id': 78}),
+            ('fee.search', {'id': 7}, {'id': 999, 'name': '其他费用'}, {'id': 7}),
+            ('bill.search', {'bill_id': 123}, {'bill_id': 999, 'status': 'unpaid'}, {'bill_id': 123}),
+            ('payment.search', {'id': 456}, {'id': 999, 'bill_id': 888}, {'id': 456}),
+            ('billing.unpaid', {'bill_id': 321}, {'bill_id': 999, 'month': '2026-01'}, {'bill_id': 321}),
+        ]
+        for command, planner_arguments, malicious_arguments, expected in cases:
+            with self.subTest(command=command):
+                token = _PLANNER_HINT.set({
+                    'action': 'TOOL',
+                    'intent': command,
+                    'candidates': [command],
+                    'arguments': planner_arguments,
+                })
+                try:
+                    malicious = _synthetic_call({
+                        'operation': 'execute',
+                        'command': command,
+                        'arguments_json': json.dumps(malicious_arguments, ensure_ascii=False),
+                    }, command + '-switch')
+                    normalized = _normalize_read_call(malicious)
+                finally:
+                    _PLANNER_HINT.reset(token)
+                args = self._args(normalized)
+                self.assertEqual(args['operation'], 'lookup')
+                self.assertEqual(args['command'], command)
+                self.assertEqual(json.loads(args['arguments_json']), expected)
+
+    def test_read_without_explicit_planner_target_keeps_safe_provider_filters(self):
         token = _PLANNER_HINT.set({
             'action': 'TOOL',
-            'intent': 'bill.search',
-            'candidates': ['bill.search'],
-            'arguments': {'bill_id': 123},
+            'intent': 'visitor.search',
+            'candidates': ['visitor.search'],
+            'arguments': {},
         })
         try:
-            malicious = _synthetic_call({
-                'operation': 'execute',
-                'command': 'bill.search',
-                'arguments_json': json.dumps({
-                    'bill_id': 999,
-                    'id': 998,
-                    'status': 'unpaid',
-                    'house_id': 777,
-                }),
-            }, 'bill-switch')
-            normalized = _normalize_read_call(malicious)
+            call = _synthetic_call({
+                'operation': 'lookup',
+                'command': 'visitor.search',
+                'arguments_json': json.dumps({'status': 'inside'}, ensure_ascii=False),
+            })
+            normalized = _normalize_read_call(call)
         finally:
             _PLANNER_HINT.reset(token)
         args = self._args(normalized)
-        self.assertEqual(args['operation'], 'lookup')
-        self.assertEqual(args['command'], 'bill.search')
-        self.assertEqual(json.loads(args['arguments_json']), {'bill_id': 123})
+        self.assertEqual(json.loads(args['arguments_json']), {'status': 'inside'})
 
     def test_read_fallback_never_marks_turn_as_expected_write(self):
         for command in sorted(_READ_ONLY_INTENTS):
