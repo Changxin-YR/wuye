@@ -43,6 +43,14 @@ _RESOLVER_ARGUMENTS = {
     'whoami': set(),
 }
 
+_RESOLVED_SINGLE_TARGET_INTENTS = {
+    'order.accept', 'order.progress', 'order.finish', 'order.reopen', 'order.close', 'order.cancel',
+    'complaint.resolve', 'complaint.close',
+    'visitor.checkin', 'visitor.checkout', 'visitor.cancel',
+    'vehicle.archive', 'device.archive', 'inspection.complete',
+    'payment.reverse', 'bill.void',
+}
+
 
 def _planner_action():
     hint = _PLANNER_HINT.get() or {}
@@ -64,13 +72,17 @@ def _expected_write():
     return isinstance(fallback, dict) and fallback.get('operation') in {'execute', 'propose'}
 
 
-def _parse_call_command(call):
+def _parse_call_args(call):
     try:
         function = call.get('function') or {}
         arguments = json.loads(function.get('arguments') or '{}')
-        return arguments.get('command') if isinstance(arguments, dict) else None
+        return arguments if isinstance(arguments, dict) else {}
     except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
-        return None
+        return {}
+
+
+def _parse_call_command(call):
+    return _parse_call_args(call).get('command')
 
 
 def _context_resolver_fallback():
@@ -125,18 +137,85 @@ def _resolver_items(result):
     return None
 
 
+def _narrow_resolver_result(result, item):
+    """Show the model only the server-selected row for an explicit latest reference."""
+    envelope = dict(result) if isinstance(result, dict) else {}
+    if isinstance(envelope.get('items'), list):
+        envelope['items'] = [item]
+        return envelope
+    data = envelope.get('data')
+    if isinstance(data, dict):
+        data = dict(data)
+        if isinstance(data.get('items'), list):
+            data['items'] = [item]
+            envelope['data'] = data
+            return envelope
+        nested = data.get('data')
+        if isinstance(nested, dict) and isinstance(nested.get('items'), list):
+            nested = dict(nested)
+            nested['items'] = [item]
+            data['data'] = nested
+            envelope['data'] = data
+    return envelope
+
+
 def _resolver_terminal_result(result, code, message):
     envelope = dict(result) if isinstance(result, dict) else {}
     envelope.update({'ok': False, 'code': code, 'message': message, 'terminal': True})
     return envelope
 
 
+def _resolved_write_fallback(query, item):
+    """Build a mutation from the exact row selected by the scoped resolver.
+
+    Only single-target commands are handled here. Multi-entity commands such as
+    dispatch or parking assignment still require all of their independent
+    entities to be resolved before execution.
+    """
+    hint = _PLANNER_HINT.get() or {}
+    intent = hint.get('intent')
+    if intent not in _RESOLVED_SINGLE_TARGET_INTENTS or not isinstance(item, dict):
+        return None
+    rid = item.get('id')
+    version = item.get('version')
+    if rid is None or version is None:
+        return None
+    params = {'id': rid, 'version': version}
+    text = str(query or '').strip()
+    if intent in {'order.progress', 'order.finish', 'order.reopen', 'order.close', 'order.cancel'}:
+        params['remark'] = text
+    elif intent in {'complaint.resolve', 'complaint.close'}:
+        params['resolution'] = text
+    elif intent in {'vehicle.archive', 'device.archive', 'payment.reverse', 'bill.void'}:
+        params['reason'] = text
+    elif intent == 'inspection.complete':
+        params['findings'] = text
+        params['fault'] = '故障' in text or '异常' in text
+    operation = 'propose' if str(hint.get('action') or '').upper() == 'CONFIRM' else 'execute'
+    return {'operation': operation, 'command': intent, 'arguments_json': json.dumps(params, ensure_ascii=False)}
+
+
+def _call_matches_resolved_target(call, item):
+    """Reject a provider mutation that changes the row chosen by the resolver."""
+    if not isinstance(item, dict) or item.get('id') is None:
+        return False
+    outer = _parse_call_args(call)
+    try:
+        params = json.loads(outer.get('arguments_json') or '{}')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(params, dict):
+        return False
+    target = params.get('id')
+    return target is not None and str(target) == str(item['id'])
+
+
 def _chat_common(self, query, user, conversation_id, tool_callback, system_prompt, stream=False):
     """Run a bounded tool loop with server-verifiable execution state.
 
     A RESOLVE_FIRST workflow is a hard state transition: before a scoped lookup
-    returns exactly one target, provider-supplied write calls are ignored. This
-    prevents a model from guessing an in-scope id and mutating the wrong record.
+    returns exactly one target, provider-supplied write calls are ignored. Once a
+    target is selected, subsequent mutation calls are bound to that exact row.
     """
     messages = self._conversation_messages(query, user, conversation_id, system_prompt)
     seen_tool_calls = set()
@@ -150,8 +229,12 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
     executed = False
     lookup_performed = False
     resolver_ready = False
+    resolved_item = None
     tools = self._tool_definition()
-    resolve_first = (_PLANNER_HINT.get() or {}).get('entity_status') == 'RESOLVE_FIRST'
+    hint = _PLANNER_HINT.get() or {}
+    resolve_first = hint.get('entity_status') == 'RESOLVE_FIRST'
+    resolve_strategy = (hint.get('arguments') or {}).get('_resolve_strategy')
+    final_intent = hint.get('intent')
     for _ in range(6):
         payload = {'model': self.model, 'messages': messages, 'stream': stream}
         allow_tools = bool(tool_callback and not force_final and _core._tools_allowed())
@@ -194,35 +277,43 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
             message['content'] = message.get('content') or '当前请求没有执行任何业务操作。'
             provider_calls = []
 
-        # Hard resolver gate: before a unique read result exists, ignore any
-        # provider attempt to jump directly to the mutation command.
         if allow_tools and resolve_first and not resolver_ready and provider_calls:
             allowed_resolvers = {
-                item for item in (_PLANNER_HINT.get() or {}).get('candidates', ())
+                item for item in hint.get('candidates', ())
                 if item in _READ_ONLY_INTENTS
             }
             provider_calls = [call for call in provider_calls if _parse_call_command(call) in allowed_resolvers]
+        elif allow_tools and resolve_first and resolver_ready and resolved_item and provider_calls:
+            # Resolver calls after selection are no-progress loops. Final writes
+            # must point to the exact row the backend just selected.
+            filtered = []
+            for call in provider_calls:
+                command = _parse_call_command(call)
+                if command in _READ_ONLY_INTENTS:
+                    continue
+                if command == final_intent and _call_matches_resolved_target(call, resolved_item):
+                    filtered.append(call)
+            provider_calls = filtered
 
-        # The wrapper owns fallback synthesis. Core fallback is disabled here so
-        # a normal plan cannot be replayed twice and RESOLVE_FIRST cannot skip
-        # its scoped resolver by synthesizing the final mutation too early.
         calls = _core._planner_calls(message, provider_calls, force_final, False) if allow_tools else []
-        # A provider can ask for a real Tool Call that is outside the deterministic
-        # candidate set. Treat that exactly like prose: discard it and use the
-        # server-side fallback/resolver instead of ending the turn with an empty
-        # assistant message or leaking the provider's wrong tool choice.
         if provider_calls and not calls:
             provider_calls = []
         if allow_tools and not provider_calls and not calls:
-            fallback = (_PLANNER_HINT.get() or {}).get('tool_call')
-            if isinstance(fallback, dict) and not planner_fallback_used and (not resolve_first or resolver_ready):
-                calls = [_synthetic_call(fallback)]
-                planner_fallback_used = True
-            elif resolve_first and not resolver_ready and not resolver_fallback_used:
-                resolver = _context_resolver_fallback()
-                if isinstance(resolver, dict):
-                    calls = [_synthetic_call(resolver, 'planner-resolver')]
-                    resolver_fallback_used = True
+            if resolve_first and resolver_ready and resolved_item and not planner_fallback_used:
+                resolved_fallback = _resolved_write_fallback(query, resolved_item)
+                if isinstance(resolved_fallback, dict):
+                    calls = [_synthetic_call(resolved_fallback, 'planner-resolved-write')]
+                    planner_fallback_used = True
+            if not calls:
+                fallback = hint.get('tool_call')
+                if isinstance(fallback, dict) and not planner_fallback_used and (not resolve_first or resolver_ready):
+                    calls = [_synthetic_call(fallback)]
+                    planner_fallback_used = True
+                elif resolve_first and not resolver_ready and not resolver_fallback_used:
+                    resolver = _context_resolver_fallback()
+                    if isinstance(resolver, dict):
+                        calls = [_synthetic_call(resolver, 'planner-resolver')]
+                        resolver_fallback_used = True
         if not provider_calls and calls:
             message = dict(message)
             message['role'] = 'assistant'
@@ -247,7 +338,12 @@ def _chat_common(self, query, user, conversation_id, tool_callback, system_promp
                             if resolve_first and command in _READ_ONLY_INTENTS:
                                 items = _resolver_items(result)
                                 if items is not None:
-                                    if len(items) == 1:
+                                    if resolve_strategy == 'latest' and command == 'payment.search' and items:
+                                        resolved_item = items[0]
+                                        result = _narrow_resolver_result(result, resolved_item)
+                                        resolver_ready = True
+                                    elif len(items) == 1:
+                                        resolved_item = items[0]
                                         resolver_ready = True
                                     elif len(items) == 0:
                                         result = _resolver_terminal_result(
