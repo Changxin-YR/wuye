@@ -200,6 +200,67 @@ def _repair_complaint_assign(text, result, context, authorized_commands):
     }
 
 
+def _repair_inspection_create(text, result, context, authorized_commands):
+    """Only execute inspection creation when all human business facts are explicit."""
+    if result.get('intent') != 'inspection.create':
+        return result
+    values = dict(result.get('arguments') or {})
+    assignee = re.search(
+        r'(?:交给|分给|安排给|由|让)\s*([\u4e00-\u9fff]{2,8}?)(?=负责|处理|巡检|检查|，|,|。|；|;|\s|$)',
+        text,
+    )
+    if assignee:
+        values['assignee_name'] = assignee.group(1).strip()
+    elif values.get('repairer_name'):
+        values['assignee_name'] = values['repairer_name']
+    due_at = visitor_expected_at(text)
+    if due_at:
+        values['due_at'] = due_at
+    checklist = re.search(
+        r'(?:检查|巡检)(?:内容|项目|清单)?(?:是|为|包括|：|:)?\s*([^，,。；;]{1,500})',
+        text,
+    )
+    if checklist:
+        item = checklist.group(1).strip()
+        if item and not re.search(r'^(?:任务|一下|一次)$', item):
+            values['checklist'] = item
+    resolved_device = (context or {}).get('resolved_device') or {}
+    if resolved_device.get('id') and not (values.get('device_code') or values.get('code')):
+        values['device_id'] = resolved_device['id']
+    missing = []
+    if not (values.get('device_id') or values.get('device_code') or values.get('code')):
+        missing.append('device')
+    if not values.get('assignee_name'):
+        missing.append('assignee')
+    if not values.get('due_at'):
+        missing.append('due_at')
+    if not values.get('checklist'):
+        missing.append('checklist')
+    required = ('device.search', 'inspection_staff.search', 'inspection.create')
+    authorized = set(authorized_commands or ())
+    candidates = [command for command in required if command in authorized]
+    if missing:
+        return {
+            'action': 'CLARIFY',
+            'intent': 'inspection.create',
+            'candidates': candidates,
+            'missing_fields': missing,
+            'entity_status': 'MISSING',
+            'arguments': values,
+        }
+    if not all(command in authorized for command in required):
+        return result
+    clear_pending_plan()
+    return {
+        'action': 'TOOL',
+        'intent': 'inspection.create',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_MULTI',
+        'arguments': values,
+    }
+
+
 def _smooth_context_resolution(text, result, authorized_commands):
     if result.get('action') != 'CLARIFY':
         return result
@@ -352,6 +413,10 @@ def _clarification_text(result):
         return '你指哪张工单？可以直接说工单号；如果就是刚才那张，也可以说“刚才那张”。'
     if slot in {'repairer', 'assignee'}:
         return '要交给哪位工作人员处理？直接说姓名即可；同名时我再请你补充区分信息。'
+    if slot == 'due_at':
+        return '这条巡检任务要求什么时候完成？请给出明确日期和时间，例如“明天下午两点”。'
+    if slot == 'checklist':
+        return '这次巡检具体要检查哪些项目？例如“检查振动、温度和是否漏水”。'
     if slot == 'person':
         return '你指哪位人员？直接说姓名即可；同名时可以再补联系电话。'
     if slot == 'host_person':
@@ -417,6 +482,7 @@ def plan_request(message, authorized_commands, context=None):
     result = _repair_order_cancel(text, result, authorized_commands)
     result = _repair_order_assign(result, context, authorized_commands)
     result = _repair_complaint_assign(text, result, context, authorized_commands)
+    result = _repair_inspection_create(text, result, context, authorized_commands)
     result = _smooth_context_resolution(text, result, authorized_commands)
     result = _repair_exact_community_followup(text, result, context, authorized_commands)
     result = _repair_visitor_create(text, result, context, authorized_commands)
