@@ -38,7 +38,7 @@ _RESOLVER_ARGUMENTS = {
     'visitor.search': {'community_id', 'building_id', 'house_id', 'status', 'phone', 'name', 'id'},
     'vehicle.search': {'community_id', 'building_id', 'house_id', 'person_id', 'status', 'plate', 'id'},
     'parking.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
-    'parking_use.search': {'community_id', 'building_id', 'status', 'space_code', 'plate'},
+    'parking_use.search': {'community_id', 'building_id', 'status', 'space_code', 'plate', 'id'},
     'device.search': {'community_id', 'building_id', 'status', 'category', 'code', 'name', 'id'},
     'inspection.search': {'community_id', 'building_id', 'device_id', 'assignee_id', 'status', 'id'},
     'fee.search': {'community_id', 'fee_item_id', 'name', 'id'},
@@ -47,6 +47,24 @@ _RESOLVER_ARGUMENTS = {
     'billing.unpaid': {'community_id', 'building_id', 'building_name', 'unit', 'room_no', 'house_id', 'person_id', 'month', 'bill_id', 'id'},
     'notice.read': {'community_id', 'building_id'},
     'whoami': set(),
+}
+
+# If a user explicitly states a stable business identifier, the deterministic
+# planner owns that target. The provider may present the result but may not
+# silently switch to another in-scope object or add filters that hide it.
+_PLANNER_OWNED_READ_FIELDS = {
+    'order.search': {'order_no': ('order_no',)},
+    'complaint.search': {'id': ('id', 'complaint_id')},
+    'visitor.search': {'id': ('id',), 'phone': ('phone',), 'name': ('name', 'visitor_name')},
+    'vehicle.search': {'plate': ('plate',)},
+    'parking.search': {'space_code': ('space_code',), 'plate': ('plate',)},
+    'parking_use.search': {'id': ('id',), 'space_code': ('space_code',), 'plate': ('plate',)},
+    'device.search': {'code': ('code', 'device_code')},
+    'inspection.search': {'id': ('id',)},
+    'fee.search': {'id': ('id', 'fee_item_id')},
+    'bill.search': {'bill_id': ('bill_id', 'id')},
+    'payment.search': {'id': ('id', 'payment_id'), 'bill_id': ('bill_id',)},
+    'billing.unpaid': {'bill_id': ('bill_id',)},
 }
 
 _RESOLVED_SINGLE_TARGET_INTENTS = {
@@ -117,6 +135,24 @@ def _parse_call_command(call):
     return _parse_call_args(call).get('command')
 
 
+def _planner_owned_read_params(command):
+    hint = _PLANNER_HINT.get() or {}
+    if hint.get('intent') != command:
+        return None
+    values = dict(hint.get('arguments') or {})
+    spec = _PLANNER_OWNED_READ_FIELDS.get(command)
+    if not spec:
+        return None
+    params = {}
+    for output_key, source_keys in spec.items():
+        for source_key in source_keys:
+            value = values.get(source_key)
+            if value not in (None, ''):
+                params[output_key] = value
+                break
+    return params or None
+
+
 def _normalize_read_call(call):
     outer = _parse_call_args(call)
     command = outer.get('command')
@@ -124,16 +160,9 @@ def _normalize_read_call(call):
         return call
     outer = dict(outer)
     outer['operation'] = 'lookup'
-    if command == 'bill.search':
-        hint = _PLANNER_HINT.get() or {}
-        values = dict(hint.get('arguments') or {})
-        planned_bill_id = values.get('bill_id')
-        if hint.get('intent') == 'bill.search' and planned_bill_id not in (None, ''):
-            # A concrete business identifier came from the user's request and
-            # deterministic planner. The provider may present the result but
-            # must not silently switch the lookup to another in-scope bill or
-            # add a status filter that makes the requested bill disappear.
-            outer['arguments_json'] = json.dumps({'bill_id': planned_bill_id}, ensure_ascii=False)
+    owned = _planner_owned_read_params(command)
+    if owned is not None:
+        outer['arguments_json'] = json.dumps(owned, ensure_ascii=False)
     if command == 'parking_use.search':
         try:
             params = json.loads(outer.get('arguments_json') or '{}')
