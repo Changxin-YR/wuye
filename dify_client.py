@@ -214,11 +214,8 @@ def _multi_resolver_fallback(command, resolved=None):
             return None
     elif intent == 'inspection.create':
         if command == 'device.search':
-            device_id = values.get('device_id')
             code = values.get('device_code') or values.get('code')
-            if device_id:
-                params['id'] = device_id
-            elif code:
+            if code:
                 params['code'] = code
             else:
                 return None
