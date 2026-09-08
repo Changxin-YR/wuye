@@ -311,13 +311,43 @@ def query(db, actor, command, args):
 
     if command == "person.search":
         q = policy.query(Person)
-        if args.get("id"):
-            q = q.where(Person.id == args["id"])
+        person_id = args.get("id") or args.get("person_id")
+        if person_id:
+            q = q.where(Person.id == int(person_id))
         if args.get("person_name"):
             q = q.where(Person.name == args["person_name"])
         if args.get("phone"):
             q = q.where(Person.phone == args["phone"])
-        return _items(db.scalars(q.limit(101)))
+        if args.get("community_id"):
+            q = q.where(Person.community_id == int(args["community_id"]))
+
+        building_id = args.get("building_id")
+        building_name = args.get("building_name") or args.get("building")
+        target_building = None
+        if building_id:
+            target_building = policy.get(Building, int(building_id))
+            if args.get("community_id") and target_building.community_id != int(args["community_id"]):
+                abort(400, description="楼栋不属于指定小区")
+        elif building_name:
+            buildings = policy.query(Building)
+            if args.get("community_id"):
+                buildings = buildings.where(Building.community_id == int(args["community_id"]))
+            buildings = buildings.where(Building.name.in_(_building_aliases(building_name)))
+            matches = list(db.scalars(buildings.order_by(Building.id).limit(2)))
+            if not matches:
+                abort(404, description="未找到该楼栋或该楼栋不在当前账号数据范围内")
+            if len(matches) > 1:
+                abort(409, description="多个小区存在同名楼栋，请补充小区后再查询住户")
+            target_building = matches[0]
+        if target_building:
+            resident_ids = select(HousePerson.person_id).where(
+                HousePerson.community_id == target_building.community_id,
+                HousePerson.building_id == target_building.id,
+                HousePerson.is_resident.is_(True),
+                effective(),
+            )
+            q = q.where(Person.id.in_(resident_ids))
+        return _items(db.scalars(q.order_by(Person.id).limit(101)))
 
     if command in STAFF_QUERY_SPECS:
         _, required_worker_permission = STAFF_QUERY_SPECS[command]
