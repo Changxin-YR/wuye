@@ -36,11 +36,21 @@ class SmoothContextPlannerTests(unittest.TestCase):
         self.assertIn('visitor.search', plan['candidates'])
 
     def test_contextual_complaint_close_still_requires_confirmation(self):
-        plan = plan_request('这个投诉回访确认后结案', ALL, {})
-        self.assertEqual(plan['intent'], 'complaint.close')
+        for text in ('这个投诉回访确认后结案', '回访住户确认后结案'):
+            with self.subTest(text=text):
+                plan = plan_request(text, ALL, {})
+                self.assertEqual(plan['intent'], 'complaint.close')
+                self.assertEqual(plan['action'], 'CONFIRM')
+                self.assertEqual(plan['arguments']['status'], 'resolved')
+                self.assertEqual(plan['candidates'], ['complaint.search', 'complaint.close'])
+
+    def test_retired_device_is_resolved_before_archive_confirmation(self):
+        plan = plan_request('归档已经报废的设备', ALL, {})
+        self.assertEqual(plan['intent'], 'device.archive')
         self.assertEqual(plan['action'], 'CONFIRM')
-        self.assertEqual(plan['arguments']['status'], 'resolved')
-        self.assertEqual(plan['candidates'], ['complaint.search', 'complaint.close'])
+        self.assertEqual(plan['entity_status'], 'RESOLVE_FIRST')
+        self.assertEqual(plan['arguments']['status'], 'retired')
+        self.assertEqual(plan['candidates'], ['device.search', 'device.archive'])
 
     def test_previous_payment_resolves_then_confirms(self):
         plan = plan_request('撤回上一笔收款记录', ALL, {})
@@ -53,6 +63,8 @@ class SmoothContextPlannerTests(unittest.TestCase):
         plan = plan_request('确认刚才的访客进入', {'visitor.search'}, {})
         self.assertNotEqual(plan['action'], 'TOOL')
         self.assertNotIn('visitor.checkin', plan.get('candidates', []))
+        payment = plan_request('撤回上一笔收款记录', {'payment.reverse'}, {})
+        self.assertEqual(payment['action'], 'CLARIFY')
 
     def test_device_code_survives_into_legacy_builder_compatibility_field(self):
         plan = plan_request('登记A栋水泵设备，编号P-01', ALL | {'building.search'}, {})
