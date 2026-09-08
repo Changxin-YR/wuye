@@ -1,8 +1,10 @@
-"""Deterministic financial slot parsing for the property-management Agent.
+"""Deterministic financial slot parsing and read-query repair for the property-management Agent.
 
 Financial writes are never allowed to invent fee items, billing dates, payment
 channels, receipt references, mutation targets or audit reasons. This module
-only prepares user-supplied business facts for existing scoped resolvers and
+also repairs common operator-style read phrases after the legacy planner so
+queries such as “查看收费项目” cannot be mistaken for mutations. It only
+prepares user-supplied business facts for existing scoped resolvers and
 PropertyService; it never grants permissions.
 """
 from datetime import datetime, timedelta
@@ -88,6 +90,96 @@ def parse_financial_reason(text, intent, followup=False):
     return None
 
 
+_READ_WORDS = re.compile(r'查询|查看|看看|查一下|查下|看下|详情|状态|记录|列表|有哪些|有什么|历史')
+
+
+def _read_result(intent, authorized, values):
+    if intent not in authorized:
+        return {
+            'action': 'DENY', 'intent': intent, 'candidates': [],
+            'missing_fields': [], 'entity_status': 'FORBIDDEN', 'arguments': values,
+        }
+    return {
+        'action': 'TOOL', 'intent': intent, 'candidates': [intent],
+        'missing_fields': [], 'entity_status': 'RESOLVED', 'arguments': values,
+    }
+
+
+def repair_read_plan(text, result, authorized_commands):
+    """Repair common read phrases without changing RBAC/DataScope semantics.
+
+    The older detector intentionally focuses on mutation workflows and has a few
+    broad patterns (notably ``收费项目``) that can classify a read request as a
+    write. Explicit operator read language wins over those broad patterns, but
+    security-boundary denials and explicit mutation language are never relaxed.
+    """
+    value = str(text or '').strip()
+    if not value or not _READ_WORDS.search(value):
+        return result
+    if result.get('intent') == 'security_boundary' or result.get('action') == 'DENY':
+        return result
+    # Never reinterpret an explicitly requested mutation as a read merely because
+    # the sentence also contains “查看/状态” in explanatory text.
+    if re.search(r'新增|新建|创建|登记|修改|更新|作废|冲销|冲正|撤回|发布|删除|归档|分派|派给|分给', value):
+        return result
+
+    authorized = set(authorized_commands or ())
+    values = dict(result.get('arguments') or {})
+
+    if re.search(r'投诉(?:单|记录|详情|状态)|投诉\s*#?\s*\d+', value):
+        matched = re.search(r'投诉(?:单|记录)?\s*#?\s*([1-9]\d{0,8})', value)
+        if matched:
+            values['id'] = int(matched.group(1))
+            values['complaint_id'] = int(matched.group(1))
+        return _read_result('complaint.search', authorized, values)
+
+    if re.search(r'访客|来访', value):
+        matched = re.search(r'(?:访客|来访)(?:记录)?\s*#?\s*([1-9]\d{0,8})', value)
+        if matched:
+            values['id'] = int(matched.group(1))
+        named = re.search(r'(?:访客|来访人)(?:姓名)?\s*([\u4e00-\u9fff]{2,4})', value)
+        if named:
+            values['name'] = named.group(1)
+        return _read_result('visitor.search', authorized, values)
+
+    if re.search(r'巡检(?:任务|记录|单|详情|状态)', value):
+        matched = re.search(r'巡检(?:任务|记录|单)?\s*#?\s*([1-9]\d{0,8})', value)
+        if matched:
+            values['id'] = int(matched.group(1))
+        return _read_result('inspection.search', authorized, values)
+
+    if re.search(r'收款(?:记录|单|详情|状态)|支付记录', value):
+        matched = re.search(r'(?:收款(?:记录|单)?|支付记录)\s*#?\s*([1-9]\d{0,8})', value)
+        if matched:
+            values['id'] = int(matched.group(1))
+            values['payment_id'] = int(matched.group(1))
+        bill = re.search(r'账单\s*#?\s*([1-9]\d{0,8})', value)
+        if bill:
+            values['bill_id'] = int(bill.group(1))
+        return _read_result('payment.search', authorized, values)
+
+    if re.search(r'收费项目|收费标准|计费项目|费用项目', value):
+        matched = re.search(r'(?:收费项目|计费项目|费用项目)\s*#?\s*([1-9]\d{0,8})', value)
+        if matched:
+            values['id'] = int(matched.group(1))
+            values['fee_item_id'] = int(matched.group(1))
+        return _read_result('fee.search', authorized, values)
+
+    if re.search(r'车辆|车牌', value) and not re.search(r'停在哪|停车位置|车位', value):
+        plate = re.search(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5}', value, re.I)
+        if plate:
+            values['plate'] = plate.group(0).upper()
+        return _read_result('vehicle.search', authorized, values)
+
+    if re.search(r'车位使用|停车使用|占用关系', value):
+        matched = re.search(r'(?:车位使用|停车使用|占用关系)(?:记录)?\s*#?\s*([1-9]\d{0,8})', value)
+        if matched:
+            values['id'] = int(matched.group(1))
+        return _read_result('parking_use.search', authorized, values)
+
+    return result
+
+
 def _question(slot, intent):
     if slot == 'building':
         return '要给哪一栋生成账单？请直接告诉我楼栋，例如“23栋”。'
@@ -131,6 +223,7 @@ def _result(intent, action, candidates, values, missing=None, status='RESOLVED')
 
 def repair_financial_plan(text, result, authorized_commands):
     """Turn financial writes into explicit-slot, server-resolved plans."""
+    result = repair_read_plan(text, result, authorized_commands)
     intent = result.get('intent')
     financial_intents = {'bill.create', 'bill.batch', 'bill.void', 'payment.record', 'payment.reverse'}
     if intent not in financial_intents:
