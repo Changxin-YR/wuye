@@ -10,6 +10,14 @@ community rather than the resident-directory building filter.
 import json
 import re
 
+try:
+    from flask import g, has_request_context
+except Exception:  # pragma: no cover - planner tests can run without Flask
+    g = None
+
+    def has_request_context():
+        return False
+
 from agent_lease_patch import is_lease_create_text, parse_lease_business_facts
 
 
@@ -18,6 +26,7 @@ _MULTI_TENANT_RE = re.compile(
     r'[\u4e00-\u9fff]{2,4}\s*(?:、|和|与|及|,|，)\s*'
     r'[\u4e00-\u9fff]{2,4}(?=.{0,12}(?:办理入住|租户入住|登记租户入住|入住))'
 )
+_REQUEST_CACHE_ATTR = '_lease_completed_plan_for_request'
 
 
 def has_multiple_tenants(text):
@@ -63,43 +72,92 @@ def _install_new_tenant_scope_patch():
     dify_client._lease_new_tenant_scope_patch_installed = True
 
 
+def _copy_plan(result):
+    copied = dict(result)
+    copied['candidates'] = list(result.get('candidates') or [])
+    copied['missing_fields'] = list(result.get('missing_fields') or [])
+    copied['arguments'] = dict(result.get('arguments') or {})
+    return copied
+
+
+def _cache_completed_plan(text, result):
+    """Keep one safe completed lease plan only for the current Flask request.
+
+    /ai/chat may deliberately re-run the planner after adding DB-derived context.
+    A pending-plan continuation is consumed by the first run, so the second run
+    can otherwise see only a short follow-up such as lease dates and degrade to
+    ``unknown``. Flask ``g`` is request-local, so this never becomes cross-turn
+    authority or long-lived state.
+    """
+    if not has_request_context():
+        return
+    setattr(g, _REQUEST_CACHE_ATTR, {
+        'text': str(text or '').strip(),
+        'plan': _copy_plan(result),
+    })
+
+
+def _restore_completed_plan(text, result, authorized_commands):
+    if not has_request_context():
+        return result
+    if result.get('intent') != 'unknown' or result.get('action') != 'ANSWER':
+        return result
+    cached = getattr(g, _REQUEST_CACHE_ATTR, None)
+    if not isinstance(cached, dict) or cached.get('text') != str(text or '').strip():
+        return result
+    plan = cached.get('plan')
+    if not isinstance(plan, dict):
+        return result
+    required = {'house.search', 'person.search', 'lease.create'}
+    if not required.issubset(set(authorized_commands or ())):
+        return result
+    if plan.get('intent') != 'lease.create' or plan.get('entity_status') != 'RESOLVE_MULTI' or plan.get('action') != 'TOOL':
+        return result
+    return _copy_plan(plan)
+
+
 def repair_multi_tenant_lease_plan(text, result, authorized_commands):
     """Keep lease tenant resolution server-owned and fail closed on person lists."""
-    if result.get('intent') == 'lease.create' and result.get('entity_status') == 'RESOLVE_MULTI':
-        _install_new_tenant_scope_patch()
+    if has_multiple_tenants(text):
+        authorized = set(authorized_commands or ())
+        required = ('house.search', 'person.search', 'lease.create')
+        candidates = [command for command in required if command in authorized]
+        if result.get('action') == 'DENY' or not all(command in authorized for command in required):
+            return {
+                'action': 'DENY',
+                'intent': 'lease.create',
+                'candidates': candidates,
+                'missing_fields': [],
+                'entity_status': 'FORBIDDEN',
+                'arguments': {},
+            }
 
-    if not has_multiple_tenants(text):
-        return result
+        # Rebuild only from explicit visible lease facts. Any name/phone that the
+        # single-person parser happened to pick from the list is intentionally
+        # discarded; IDs and versions are never accepted here either.
+        values = dict(parse_lease_business_facts(text, require_intent=False) or {})
+        for key in ('person_name', 'phone', 'person_id', 'person_ids', 'house_id', 'id', 'version'):
+            values.pop(key, None)
 
-    authorized = set(authorized_commands or ())
-    required = ('house.search', 'person.search', 'lease.create')
-    candidates = [command for command in required if command in authorized]
-    if result.get('action') == 'DENY' or not all(command in authorized for command in required):
         return {
-            'action': 'DENY',
+            'action': 'CLARIFY',
             'intent': 'lease.create',
-            'candidates': candidates,
-            'missing_fields': [],
-            'entity_status': 'FORBIDDEN',
-            'arguments': {},
+            'candidates': list(required),
+            'missing_fields': ['person'],
+            'entity_status': 'MISSING',
+            'arguments': values,
+            'clarification_text': (
+                '当前一次只支持一位租户办理入住。请明确本次先办理哪一位租户；'
+                '其他租户请分别办理，我不会擅自只选择其中一人。'
+            ),
         }
 
-    # Rebuild only from explicit visible lease facts. Any name/phone that the
-    # single-person parser happened to pick from the list is intentionally
-    # discarded; IDs and versions are never accepted here either.
-    values = dict(parse_lease_business_facts(text, require_intent=False) or {})
-    for key in ('person_name', 'phone', 'person_id', 'person_ids', 'house_id', 'id', 'version'):
-        values.pop(key, None)
+    if result.get('intent') == 'lease.create' and result.get('entity_status') == 'RESOLVE_MULTI' and result.get('action') == 'TOOL':
+        _install_new_tenant_scope_patch()
+        _cache_completed_plan(text, result)
+        return result
 
-    return {
-        'action': 'CLARIFY',
-        'intent': 'lease.create',
-        'candidates': list(required),
-        'missing_fields': ['person'],
-        'entity_status': 'MISSING',
-        'arguments': values,
-        'clarification_text': (
-            '当前一次只支持一位租户办理入住。请明确本次先办理哪一位租户；'
-            '其他租户请分别办理，我不会擅自只选择其中一人。'
-        ),
-    }
+    restored = _restore_completed_plan(text, result, authorized_commands)
+    if restored is not result:
+        _install_new_tenant_scope_patch()
+    return restored
