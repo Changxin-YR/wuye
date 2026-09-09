@@ -61,15 +61,51 @@ class PropertyService(_CorePropertyService):
     def do_person(self, action):
         if action == 'archive':
             person_id = self.integer('id')
+            # Resolve through Policy first so dependency checks cannot become an
+            # existence side channel for guessed out-of-scope person IDs.
+            self.policy.get(Person, person_id, True)
             active_vehicle = self.db.scalar(
-                select(Vehicle.id).where(
+                self.policy.query(Vehicle).where(
                     Vehicle.person_id == person_id,
                     Vehicle.deleted.is_(False),
                 ).limit(1)
             )
             if active_vehicle:
                 abort(409, description='人员仍有关联未归档车辆，请先处理车辆后再归档人员')
+            active_visitor = self.db.scalar(
+                self.policy.query(Visitor).where(
+                    Visitor.host_person_id == person_id,
+                    Visitor.status.in_(['registered', 'inside']),
+                ).limit(1)
+            )
+            if active_visitor:
+                abort(409, description='人员仍有关联未结束访客记录，请先完成访客离场或取消后再归档人员')
         return super().do_person(action)
+
+    def do_relation(self, action):
+        if action == 'end':
+            relation_id = self.integer('id')
+            relation = self.policy.get(HousePerson, relation_id, True)
+            if relation.kind != 'tenant' and relation.status == 'active':
+                active_vehicle = self.db.scalar(
+                    self.policy.query(Vehicle).where(
+                        Vehicle.house_id == relation.house_id,
+                        Vehicle.person_id == relation.person_id,
+                        Vehicle.deleted.is_(False),
+                    ).limit(1)
+                )
+                if active_vehicle:
+                    abort(409, description='该房屋人员关系仍有关联未归档车辆，请先处理车辆后再解除关系')
+                active_visitor = self.db.scalar(
+                    self.policy.query(Visitor).where(
+                        Visitor.house_id == relation.house_id,
+                        Visitor.host_person_id == relation.person_id,
+                        Visitor.status.in_(['registered', 'inside']),
+                    ).limit(1)
+                )
+                if active_visitor:
+                    abort(409, description='该房屋人员关系仍有关联未结束访客，请先完成访客离场或取消后再解除关系')
+        return super().do_relation(action)
 
     def do_lease(self, action):
         obj, message = super().do_lease(action)
