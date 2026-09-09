@@ -110,7 +110,10 @@ _install_lease_search_query()
 def _parse_reason(text):
     value = str(text or '').strip()
     matched = re.search(r'(?:原因|理由|因为)(?:是|为|：|:)?\s*([^，,。；;]{1,300})', value)
-    return matched.group(1).strip() if matched else None
+    if matched:
+        return matched.group(1).strip()
+    moved = re.search(r'(?:已经|已)?(?:搬走|搬离|退租)(?:了)?', value)
+    return moved.group(0).strip() if moved else None
 
 
 def _install_provider_patch():
