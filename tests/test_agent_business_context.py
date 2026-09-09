@@ -89,6 +89,27 @@ class BusinessTargetMemoryTests(unittest.TestCase):
         self.assertEqual(untouched['missing_fields'], ['complaint'])
         self.assertNotIn('plate', untouched['arguments'])
 
+    def test_partial_bill_context_never_satisfies_missing_bill_target(self):
+        broad_bill_read = {
+            'action': 'TOOL', 'intent': 'billing.unpaid',
+            'candidates': ['billing.unpaid'], 'missing_fields': [],
+            'entity_status': 'RESOLVED', 'arguments': {'month': '2026-09'},
+        }
+        self.call('查本月欠费', broad_bill_read, {'billing.unpaid'})
+        payment = {
+            'action': 'CLARIFY', 'intent': 'payment.record',
+            'candidates': ['payment.record'], 'missing_fields': ['bill'],
+            'entity_status': 'MISSING', 'arguments': {},
+        }
+        repaired = self.call(
+            '给刚才这张账单登记收款', payment,
+            {'billing.unpaid', 'payment.record'}, conversation_id='conv-bill',
+        )
+        self.assertEqual(repaired['action'], 'CLARIFY')
+        self.assertEqual(repaired['missing_fields'], ['bill'])
+        self.assertEqual(repaired['arguments'].get('period'), '2026-09')
+        self.assertNotIn('bill_id', repaired['arguments'])
+
     def test_auth_version_and_conversation_boundaries_do_not_reuse_target(self):
         vehicle = {
             'action': 'TOOL', 'intent': 'vehicle.search',
