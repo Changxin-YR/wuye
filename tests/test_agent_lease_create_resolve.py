@@ -185,7 +185,7 @@ class LeaseCreateProviderTests(unittest.TestCase):
             if args['command'] == 'person.search':
                 self.assertEqual(args['operation'], 'lookup')
                 self.assertEqual(params, {
-                    'person_name': '王五', 'community_id': 1, 'building_id': 7,
+                    'person_name': '王五', 'community_id': 1,
                 })
                 return {
                     'ok': True, 'code': 'SUCCESS',
