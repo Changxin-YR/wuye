@@ -96,7 +96,7 @@ def _clean_args(command, args):
         "community_id", "building_id", "building_name", "building", "unit_id", "unit", "unit_name",
         "room_no", "house_id", "id", "person_id", "person_name", "staff_name", "username", "phone", "month", "status", "q",
         "order_no", "plate", "space_code", "code", "name", "device_id", "assignee_id", "bill_id",
-        "fee_item_id", "category",
+        "fee_item_id", "category", "created_date",
     }
     if set(args) - allowed:
         abort(400, description="查询包含未知参数")
@@ -414,6 +414,14 @@ def query(db, actor, command, args):
                 q = q.where(getattr(Visitor, key) == args[key])
         if args.get("name"):
             q = q.where(Visitor.name == args["name"])
+        if args.get("created_date"):
+            try:
+                local_start = datetime.strptime(str(args["created_date"]), "%Y-%m-%d")
+            except ValueError:
+                abort(400, description="访客登记日期格式应为YYYY-MM-DD")
+            utc_start = local_start - timedelta(hours=8)
+            utc_end = utc_start + timedelta(days=1)
+            q = q.where(Visitor.created_at >= utc_start, Visitor.created_at < utc_end)
         return _items(db.scalars(q.order_by(Visitor.created_at.desc()).limit(101)))
 
     if command == "vehicle.search":
