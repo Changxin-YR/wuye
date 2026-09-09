@@ -171,7 +171,7 @@ class AiChatVehicleContextArchiveTests(unittest.TestCase):
                 AuditLog.status == 'success',
             ).order_by(AuditLog.id.desc()))
             self.assertIsNotNone(archive_audit)
-            self.assertIn('车辆已出售', archive_audit.after_data or '')
+            self.assertEqual(archive_audit.detail, '车辆已出售')
             execute_audit = db.scalar(select(AuditLog).where(
                 AuditLog.source == 'agent',
                 AuditLog.action == 'ai_execute',

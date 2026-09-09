@@ -23,6 +23,7 @@ _ARCHIVE_SPECS = {
     },
 }
 _REASON_RE = re.compile(r'(?:原因|理由|因为|因)(?:是|为|：|:)?\s*([^，,。；;]{1,300})')
+_DEVICE_ARCHIVE_ALIAS_RE = re.compile(r'(?:把|将)?[^，,。；;]{0,30}(?:设备|它)[^，,。；;]{0,20}归档')
 
 
 def explicit_reason(text, allow_plain=False):
@@ -38,6 +39,26 @@ def explicit_reason(text, allow_plain=False):
     ):
         return value.strip(' ，,。；;')
     return None
+
+
+def repair_archive_intent_alias(text, result, authorized_commands):
+    """Recognize common object-before-verb Chinese device archive phrasing."""
+    if not isinstance(result, dict) or result.get('intent') != 'unknown':
+        return result
+    if not _DEVICE_ARCHIVE_ALIAS_RE.search(str(text or '')):
+        return result
+    authorized = set(authorized_commands or ())
+    candidates = [command for command in ('device.search', 'device.archive') if command in authorized]
+    if 'device.archive' not in authorized and 'device.search' not in authorized:
+        return result
+    return {
+        'action': 'CLARIFY',
+        'intent': 'device.archive',
+        'candidates': candidates,
+        'missing_fields': ['device'],
+        'entity_status': 'MISSING',
+        'arguments': {},
+    }
 
 
 def _install_state_patch():
@@ -89,6 +110,14 @@ def _install_provider_patch():
     dify_client._archive_reason_provider_patch_installed = True
 
 
+def _target_present(intent, spec, values):
+    if any(values.get(key) not in (None, '') for key in spec['visible']):
+        return True
+    # “已经报废的设备” is a legitimate visible resolver filter. It may still
+    # resolve to zero/multiple rows, in which case the backend resolver stops.
+    return intent == 'device.archive' and values.get('status') == 'retired'
+
+
 def repair_archive_reason_plan(text, result, authorized_commands):
     """Require target + explicit audit reason before any archive proposal."""
     if not isinstance(result, dict):
@@ -107,9 +136,8 @@ def repair_archive_reason_plan(text, result, authorized_commands):
     if reason:
         values['reason'] = reason
 
-    target_present = any(values.get(key) not in (None, '') for key in spec['visible'])
     missing = []
-    if not target_present:
+    if not _target_present(intent, spec, values):
         missing.append(spec['target_slot'])
     if not values.get('reason'):
         missing.append('reason')

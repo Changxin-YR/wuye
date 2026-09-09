@@ -17,6 +17,33 @@ class PropertyService(_CorePropertyService):
     is never silently upgraded or silently re-targeted by this wrapper.
     """
 
+    def run(self, command, data, request_key=None):
+        result = super().run(command, data, request_key)
+        # High-risk business commands already validate ``reason`` before this
+        # point. Persist that operator-supplied reason on every domain audit row
+        # sharing the same trace so the audit trail explains *why* the mutation
+        # happened instead of recording only before/after state.
+        if (
+            command in COMMANDS
+            and COMMANDS[command][1]
+            and isinstance(data, dict)
+            and isinstance(data.get('reason'), str)
+            and data.get('reason').strip()
+        ):
+            reason = data['reason'].strip()[:500]
+            rows = list(self.db.scalars(
+                select(AuditLog).where(
+                    AuditLog.operator_id == self.actor.id,
+                    AuditLog.trace_id == self.trace_id,
+                    AuditLog.action == command,
+                )
+            ))
+            for row in rows:
+                row.detail = reason
+            if rows:
+                self.db.flush()
+        return result
+
     def ids(self, key):
         if key != 'community_ids':
             return super().ids(key)

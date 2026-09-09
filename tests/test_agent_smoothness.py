@@ -44,12 +44,19 @@ class SmoothContextPlannerTests(unittest.TestCase):
                 self.assertEqual(plan['arguments']['status'], 'resolved')
                 self.assertEqual(plan['candidates'], ['complaint.search', 'complaint.close'])
 
-    def test_retired_device_is_resolved_before_archive_confirmation(self):
-        plan = plan_request('归档已经报废的设备', ALL, {})
+    def test_retired_device_requires_reason_then_resolves_before_confirmation(self):
+        incomplete = plan_request('归档已经报废的设备', ALL, {})
+        self.assertEqual(incomplete['intent'], 'device.archive')
+        self.assertEqual(incomplete['action'], 'CLARIFY')
+        self.assertEqual(incomplete['arguments']['status'], 'retired')
+        self.assertIn('reason', incomplete['missing_fields'])
+
+        plan = plan_request('归档已经报废的设备，原因设备永久停用', ALL, {})
         self.assertEqual(plan['intent'], 'device.archive')
         self.assertEqual(plan['action'], 'CONFIRM')
         self.assertEqual(plan['entity_status'], 'RESOLVE_FIRST')
         self.assertEqual(plan['arguments']['status'], 'retired')
+        self.assertEqual(plan['arguments']['reason'], '设备永久停用')
         self.assertEqual(plan['candidates'], ['device.search', 'device.archive'])
 
     def test_previous_payment_requires_reason_then_resolves_and_confirms(self):
