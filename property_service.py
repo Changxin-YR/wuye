@@ -58,6 +58,19 @@ class PropertyService(_CorePropertyService):
             abort(400, description='请选择1—100个有效小区')
         return list(dict.fromkeys(map(int, value)))
 
+    def do_person(self, action):
+        if action == 'archive':
+            person_id = self.integer('id')
+            active_vehicle = self.db.scalar(
+                select(Vehicle.id).where(
+                    Vehicle.person_id == person_id,
+                    Vehicle.deleted.is_(False),
+                ).limit(1)
+            )
+            if active_vehicle:
+                abort(409, description='人员仍有关联未归档车辆，请先处理车辆后再归档人员')
+        return super().do_person(action)
+
     def do_lease(self, action):
         obj, message = super().do_lease(action)
         if action == 'checkout' and obj is not None:
