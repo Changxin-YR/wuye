@@ -213,6 +213,40 @@ def _merge_cached(domain, values):
     return merged, changed
 
 
+def _target_satisfied(domain, values):
+    values = dict(values or {})
+    if domain == 'complaint':
+        return bool(values.get('complaint_id') or values.get('id'))
+    if domain == 'visitor':
+        return bool(values.get('visitor_id') or values.get('id') or values.get('visitor_name') or values.get('phone'))
+    if domain == 'vehicle':
+        return bool(values.get('plate'))
+    if domain == 'parking':
+        return bool(values.get('space_code') or values.get('plate'))
+    if domain == 'lease':
+        return bool(
+            values.get('person_name') or values.get('phone')
+            or (values.get('building_name') and values.get('room_no') is not None)
+        )
+    if domain == 'bill':
+        return bool(values.get('bill_id'))
+    if domain == 'payment':
+        return bool(values.get('payment_id') or values.get('id') or values.get('bill_id'))
+    if domain == 'order':
+        return bool(values.get('order_no'))
+    if domain == 'house':
+        return bool(values.get('building_name') and values.get('room_no') is not None)
+    if domain == 'person':
+        return bool(values.get('person_name') or values.get('phone'))
+    if domain == 'device':
+        return bool(values.get('device_code') or values.get('code'))
+    if domain == 'inspection':
+        return bool(values.get('inspection_id') or values.get('id'))
+    if domain == 'notice':
+        return bool(values.get('notice_id') or values.get('id'))
+    return False
+
+
 _TARGET_SLOT = {
     'complaint': 'complaint', 'visitor': 'visitor', 'vehicle': 'vehicle',
     'parking': 'parking_use', 'lease': 'lease', 'bill': 'bill',
@@ -245,6 +279,8 @@ def _promote_context_target(result, domain, authorized_commands):
     missing = list(result.get('missing_fields') or [])
     slot = _TARGET_SLOT.get(domain)
     if slot not in missing:
+        return result
+    if not _target_satisfied(domain, result.get('arguments') or {}):
         return result
     remaining = [item for item in missing if item != slot]
     repaired = dict(result)
