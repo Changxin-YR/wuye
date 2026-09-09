@@ -6,6 +6,7 @@ short-lived pending state. A follow-up phone number narrows the same scoped
 resolver; the final worker id still comes exclusively from the backend result.
 """
 import json
+import re
 
 try:
     from flask import has_request_context
@@ -17,6 +18,9 @@ from agent_planner_core import _detect_intent
 
 
 _LOCKED_FACTS_KEY = '_staff_disambiguation_locked_facts'
+_STAFF_PHONE_FOLLOWUP_RE = re.compile(
+    r'^\s*(?:(?:维修|投诉处理|巡检)人员)?(?:的)?(?:联系电话|手机号码?|手机号|电话)\s*[:：]?\s*1[3-9]\d{9}\s*$'
+)
 _STAFF_DOMAINS = {
     'order.assign': {
         'resolver': 'staff.search',
@@ -177,8 +181,17 @@ def _install_staff_pending_intent_boundary_patch():
             pending.get('intent') if isinstance(pending, dict)
             else getattr(pending, 'intent', None)
         )
+        value = str(text or '').strip()
         if pending_intent in _STAFF_DOMAINS:
-            detected = _detect_intent(str(text or '').strip())
+            # A pure phone clue answers the current disambiguation question.
+            # Check it before generic intent detection because words such as
+            # “维修人员” can otherwise be mistaken for a brand-new repair task.
+            # The anchored pattern deliberately rejects messages containing a
+            # second business action, so cross-domain pending replacement still
+            # follows the stricter intent boundary below.
+            if _STAFF_PHONE_FOLLOWUP_RE.fullmatch(value):
+                return True
+            detected = _detect_intent(value)
             if detected and detected != pending_intent:
                 return False
         return original(text, pending)
