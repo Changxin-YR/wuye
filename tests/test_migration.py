@@ -50,7 +50,9 @@ class MigrationTests(unittest.TestCase):
             create_app({'DATABASE_URL':self.url,'SECRET_KEY':'a'*40,'UPLOAD_FOLDER':self.temp.name})
     def test_migrated_production_start_works(self):
         self.legacy();upgrade(self.engine)
-        self.assertEqual(missing_schema(self.engine),[], 'upgrade must satisfy the full schema contract before production startup')
+        drift=missing_schema(self.engine)
+        if drift:print('::error file=database.py,line=60::schema contract drift after upgrade: '+','.join(drift))
+        self.assertEqual(drift,[], 'upgrade must satisfy the full schema contract before production startup')
         app=create_app({'DATABASE_URL':self.url,'SECRET_KEY':'a'*40,'UPLOAD_FOLDER':self.temp.name})
         self.assertEqual(app.test_client().get('/health').status_code,200);app.extensions['db_engine'].dispose()
     def test_mysql_ddl_compiles(self):
