@@ -120,13 +120,22 @@ def parse_device_query_name(text):
     return name
 
 
+def _ensure_provider_owned_read_field(command, key, source_keys):
+    """Register one planner-owned read filter for the active provider wrapper."""
+    import dify_client
+    owned_fields = getattr(dify_client, '_PLANNER_OWNED_READ_FIELDS', {})
+    spec = owned_fields.get(command) if isinstance(owned_fields, dict) else None
+    if isinstance(spec, dict):
+        spec.setdefault(key, tuple(source_keys))
+    resolver_arguments = getattr(dify_client, '_RESOLVER_ARGUMENTS', {})
+    allowed = resolver_arguments.get(command) if isinstance(resolver_arguments, dict) else None
+    if isinstance(allowed, set):
+        allowed.add(key)
+
+
 def _ensure_provider_device_name_lock():
     """Make a planner-owned natural device name authoritative for provider tool calls."""
-    import dify_client
-    fields = getattr(dify_client, '_PLANNER_OWNED_READ_FIELDS', {})
-    spec = fields.get('device.search') if isinstance(fields, dict) else None
-    if isinstance(spec, dict):
-        spec.setdefault('name', ('name', 'device_name'))
+    _ensure_provider_owned_read_field('device.search', 'name', ('name', 'device_name'))
 
 
 _READ_WORDS = re.compile(r'查询|查看|看看|查一下|查下|看下|详情|状态|记录|列表|有哪些|有什么|历史')
@@ -164,16 +173,11 @@ def repair_device_read_plan(text, result):
 def repair_resident_directory_plan(text, result, authorized_commands):
     """Keep broad resident identity reads behind person.read, never property.read."""
     value = str(text or '').strip()
-    # Billing phrases may contain the word “住户” but are not requests for a
-    # resident identity directory. Never let this privacy repair steal a billing
-    # intent such as “查询B栋住户账单”.
     if re.search(r'账单|欠费|物业费|收费|费用|缴费|交费|未缴|未交|收款|付款', value):
         return result
     if not re.search(r'住户(?:信息|名单|列表|名册)|(?:有哪些|有什么|列出|查询|查|看看|看下|查一下|查下).{0,20}住户(?:信息|名单|列表|名册)', value):
         return result
     values = dict(result.get('arguments') or {})
-    # A concrete room query is intentionally handled by the privacy-preserving
-    # targeted house lookup, which returns only residents of that one house.
     if values.get('room_no') is not None:
         return result
     building_name = values.get('building_name') or values.get('building')
@@ -257,6 +261,26 @@ def repair_read_plan(text, result, authorized_commands):
     return result
 
 
+def repair_semantic_read_filters(text, result):
+    """Preserve explicit date/availability semantics that generic intent routing omits."""
+    if result.get('action') == 'DENY':
+        return result
+    value = str(text or '').strip()
+    intent = result.get('intent')
+    values = dict(result.get('arguments') or {})
+    if intent == 'visitor.search' and re.search(r'今天|今日|当天', value):
+        values['created_date'] = _china_today().isoformat()
+        _ensure_provider_owned_read_field('visitor.search', 'created_date', ('created_date',))
+    elif intent == 'parking.search' and re.search(r'空车位|空闲车位|可用车位', value):
+        values['status'] = 'available'
+        _ensure_provider_owned_read_field('parking.search', 'status', ('status',))
+    else:
+        return result
+    repaired = dict(result)
+    repaired['arguments'] = values
+    return repaired
+
+
 def _question(slot, intent):
     if slot == 'building':
         return '要给哪一栋生成账单？请直接告诉我楼栋，例如“23栋”。'
@@ -303,6 +327,7 @@ def repair_financial_plan(text, result, authorized_commands):
     result = repair_device_read_plan(text, result)
     result = repair_resident_directory_plan(text, result, authorized_commands)
     result = repair_read_plan(text, result, authorized_commands)
+    result = repair_semantic_read_filters(text, result)
     authorized = set(authorized_commands or ())
     intent = result.get('intent')
 
