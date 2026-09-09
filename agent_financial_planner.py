@@ -125,10 +125,16 @@ def _ensure_provider_owned_read_field(command, key, source_keys):
     import dify_client
     owned_fields = getattr(dify_client, '_PLANNER_OWNED_READ_FIELDS', {})
     spec = owned_fields.get(command) if isinstance(owned_fields, dict) else None
+    if spec is None and isinstance(owned_fields, dict):
+        spec = {}
+        owned_fields[command] = spec
     if isinstance(spec, dict):
         spec.setdefault(key, tuple(source_keys))
     resolver_arguments = getattr(dify_client, '_RESOLVER_ARGUMENTS', {})
     allowed = resolver_arguments.get(command) if isinstance(resolver_arguments, dict) else None
+    if allowed is None and isinstance(resolver_arguments, dict):
+        allowed = set()
+        resolver_arguments[command] = allowed
     if isinstance(allowed, set):
         allowed.add(key)
 
@@ -262,13 +268,16 @@ def repair_read_plan(text, result, authorized_commands):
 
 
 def repair_semantic_read_filters(text, result):
-    """Preserve explicit date/availability semantics that generic intent routing omits."""
+    """Preserve explicit date/status/month semantics that generic intent routing omits."""
     if result.get('action') == 'DENY':
         return result
     value = str(text or '').strip()
     intent = result.get('intent')
     values = dict(result.get('arguments') or {})
-    if intent == 'visitor.search' and re.search(r'今天|今日|当天', value):
+    if intent == 'complaint.stats':
+        values['month'] = parse_period(value) or _month_with_offset(0)
+        _ensure_provider_owned_read_field('complaint.stats', 'month', ('month',))
+    elif intent == 'visitor.search' and re.search(r'今天|今日|当天', value):
         values['created_date'] = _china_today().isoformat()
         _ensure_provider_owned_read_field('visitor.search', 'created_date', ('created_date',))
     elif intent == 'parking.search' and re.search(r'空车位|空闲车位|可用车位', value):
