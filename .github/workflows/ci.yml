@@ -28,10 +28,11 @@ jobs:
       - name: WSGI and readiness smoke
         env:
           SECRET_KEY: ci-secret-key-012345678901234567890123
-          DATABASE_URL: sqlite+pysqlite:///:memory:
+          DATABASE_URL: 'sqlite+pysqlite:///:memory:'
           APP_ENV: test
           COOKIE_SECURE: '0'
-        run: python -c "from app import create_app; a=create_app({'TESTING': True, 'DATABASE_URL': 'sqlite+pysqlite:///:memory:', 'SECRET_KEY': 'test'}); assert a.test_client().get('/health').status_code == 200; assert a.test_client().get('/ready').status_code == 200; import wsgi; assert callable(wsgi.application)"
+        run: >-
+          python -c "from app import create_app; a=create_app({'TESTING': True, 'DATABASE_URL': 'sqlite+pysqlite:///:memory:', 'SECRET_KEY': 'test'}); assert a.test_client().get('/health').status_code == 200; assert a.test_client().get('/ready').status_code == 200; import wsgi; assert callable(wsgi.application)"
 
   mysql:
     runs-on: ubuntu-latest
