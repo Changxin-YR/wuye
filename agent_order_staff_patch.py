@@ -1,10 +1,9 @@
-"""Order-assignment runtime disambiguation for same-name repair workers.
+"""Runtime staff disambiguation for server-resolved Agent workflows.
 
-The model never owns work-order ids, versions, or repairer ids. If scoped
-`staff.search` returns multiple eligible workers, this patch stores only the
-operator-visible order number/name as short-lived planner pending state. A
-follow-up phone number narrows the staff resolver and the final id remains the
-server-selected row.
+The model never owns worker ids. When a scoped staff resolver returns multiple
+eligible same-name workers, keep only operator-visible business facts as
+short-lived pending state. A follow-up phone number narrows the same scoped
+resolver; the final worker id still comes exclusively from the backend result.
 """
 import json
 
@@ -15,7 +14,26 @@ except Exception:  # pragma: no cover
         return False
 
 
-def _store_runtime_staff_disambiguation(hint):
+_STAFF_DOMAINS = {
+    'order.assign': {
+        'resolver': 'staff.search',
+        'required': ('order.search', 'staff.search', 'order.assign'),
+        'drop': ('repairer_id', 'order_id', 'id', 'version'),
+    },
+    'complaint.assign': {
+        'resolver': 'complaint_staff.search',
+        'required': ('complaint.search', 'complaint_staff.search', 'complaint.assign'),
+        'drop': ('assignee_id', 'id', 'version'),
+    },
+    'inspection.create': {
+        'resolver': 'inspection_staff.search',
+        'required': ('device.search', 'inspection_staff.search', 'inspection.create'),
+        'drop': ('assignee_id', 'device_id', 'id', 'version'),
+    },
+}
+
+
+def _store_runtime_staff_disambiguation(hint, spec):
     if not has_request_context():
         return
     try:
@@ -23,12 +41,12 @@ def _store_runtime_staff_disambiguation(hint):
     except Exception:  # pragma: no cover
         return
     values = dict((hint or {}).get('arguments') or {})
-    for key in ('repairer_id', 'order_id', 'id', 'version'):
+    for key in spec['drop']:
         values.pop(key, None)
     _store_pending({
         'action': 'DISAMBIGUATE',
-        'intent': 'order.assign',
-        'candidates': ['order.search', 'staff.search', 'order.assign'],
+        'intent': hint.get('intent'),
+        'candidates': list(spec['required']),
         'missing_fields': ['disambiguation'],
         'entity_status': 'AMBIGUOUS',
         'arguments': values,
@@ -38,51 +56,55 @@ def _store_runtime_staff_disambiguation(hint):
 def _install_runtime_pending_patch():
     import dify_client
 
-    if getattr(dify_client, '_order_staff_runtime_pending_patch_installed', False):
+    if getattr(dify_client, '_staff_runtime_pending_patch_installed', False):
         return
     client_cls = getattr(dify_client, 'BailianClient', None)
     if client_cls is None or not hasattr(client_cls, '_run_tool_call'):
         return
     original_run_tool_call = client_cls._run_tool_call
 
-    def order_staff_run_tool_call(self, call, tool_callback, seen_tool_calls, completed_commands):
+    def staff_run_tool_call(self, call, tool_callback, seen_tool_calls, completed_commands):
         args, result = original_run_tool_call(
             self, call, tool_callback, seen_tool_calls, completed_commands
         )
         hint = dify_client._PLANNER_HINT.get() or {}
+        spec = _STAFF_DOMAINS.get(hint.get('intent'))
         if (
-            hint.get('intent') == 'order.assign'
+            spec
             and hint.get('entity_status') == 'RESOLVE_MULTI'
             and isinstance(args, dict)
             and args.get('operation') == 'lookup'
-            and args.get('command') == 'staff.search'
+            and args.get('command') == spec['resolver']
             and isinstance(result, dict)
             and result.get('ok') is not False
         ):
             data = result.get('data')
             items = data.get('items') if isinstance(data, dict) else None
             if isinstance(items, list) and len(items) > 1:
-                _store_runtime_staff_disambiguation(hint)
+                _store_runtime_staff_disambiguation(hint, spec)
         return args, result
 
-    client_cls._run_tool_call = order_staff_run_tool_call
+    client_cls._run_tool_call = staff_run_tool_call
+    dify_client._staff_runtime_pending_patch_installed = True
+    # Keep the old marker for compatibility with code/tests that may inspect it.
     dify_client._order_staff_runtime_pending_patch_installed = True
 
 
 def _install_staff_phone_resolver_patch():
     import dify_client
 
-    if getattr(dify_client, '_order_staff_phone_resolver_patch_installed', False):
+    if getattr(dify_client, '_staff_phone_resolver_patch_installed', False):
         return
     original_resolver = dify_client._multi_resolver_fallback
 
-    def order_staff_resolver(command, resolved=None):
+    def staff_resolver(command, resolved=None):
         call = original_resolver(command, resolved)
         hint = dify_client._PLANNER_HINT.get() or {}
+        spec = _STAFF_DOMAINS.get(hint.get('intent'))
         if (
-            hint.get('intent') != 'order.assign'
+            not spec
             or hint.get('entity_status') != 'RESOLVE_MULTI'
-            or command != 'staff.search'
+            or command != spec['resolver']
             or not isinstance(call, dict)
         ):
             return call
@@ -100,19 +122,25 @@ def _install_staff_phone_resolver_patch():
         safe['arguments_json'] = json.dumps(params, ensure_ascii=False)
         return safe
 
-    dify_client._multi_resolver_fallback = order_staff_resolver
+    dify_client._multi_resolver_fallback = staff_resolver
+    dify_client._staff_phone_resolver_patch_installed = True
     dify_client._order_staff_phone_resolver_patch_installed = True
 
 
 def repair_order_staff_disambiguation_plan(text, result, authorized_commands):
-    """Install runtime guards only for a fully authorized server-resolved dispatch."""
+    """Install runtime guards for authorized staff-resolved workflows.
+
+    The historical function name is preserved because visitor/lease safety
+    layers already call it. It now covers order dispatch, complaint assignment,
+    and inspection creation with the same fail-closed semantics.
+    """
+    spec = _STAFF_DOMAINS.get(result.get('intent'))
     if (
-        result.get('intent') == 'order.assign'
+        spec
         and result.get('action') == 'TOOL'
         and result.get('entity_status') == 'RESOLVE_MULTI'
+        and set(spec['required']).issubset(set(authorized_commands or ()))
     ):
-        required = {'order.search', 'staff.search', 'order.assign'}
-        if required.issubset(set(authorized_commands or ())):
-            _install_runtime_pending_patch()
-            _install_staff_phone_resolver_patch()
+        _install_runtime_pending_patch()
+        _install_staff_phone_resolver_patch()
     return result
