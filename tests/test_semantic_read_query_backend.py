@@ -9,7 +9,7 @@ from werkzeug.security import generate_password_hash
 from app import create_app
 from business_queries import query
 from database_fixture import test_database
-from models import ParkingSpace, User, Visitor, utcnow
+from models import Building, House, ParkingSpace, Person, PropertyUnit, User, Visitor, utcnow
 
 
 PW = 'Fixture-only-296!'
@@ -37,19 +37,33 @@ class SemanticReadQueryBackendTests(unittest.TestCase):
             admin = User(username='admin', password_hash=HASH, role=0, real_name='管理员', phone='13800000001')
             db.add(admin)
             db.flush()
+            building = Building(community_id=1, name='23栋', floors=20)
+            db.add(building)
+            db.flush()
+            unit = PropertyUnit(community_id=1, building_id=building.id, name='1单元')
+            db.add(unit)
+            db.flush()
+            house = House(
+                community_id=1, building_id=building.id, unit_id=unit.id,
+                building_name='23栋', unit='1单元', room_no=101,
+                area=90, usage='residential', occupancy='owner_occupied', ownership='private',
+            )
+            host = Person(community_id=1, name='王五', phone='13800000010')
+            db.add_all([house, host])
+            db.flush()
             db.add_all([
                 Visitor(
-                    community_id=1, building_id=None, house_id=1, host_person_id=1,
+                    community_id=1, building_id=building.id, house_id=house.id, host_person_id=host.id,
                     name='今日访客', phone='13800000011', purpose='测试',
                     expected_at=utcnow() + timedelta(hours=1), created_at=utcnow(),
                 ),
                 Visitor(
-                    community_id=1, building_id=None, house_id=1, host_person_id=1,
+                    community_id=1, building_id=building.id, house_id=house.id, host_person_id=host.id,
                     name='历史访客', phone='13800000012', purpose='测试',
                     expected_at=utcnow() - timedelta(days=2), created_at=utcnow() - timedelta(days=2),
                 ),
-                ParkingSpace(community_id=1, building_id=None, code='A-001', location='地库', status='available'),
-                ParkingSpace(community_id=1, building_id=None, code='A-002', location='地库', status='occupied'),
+                ParkingSpace(community_id=1, building_id=building.id, code='A-001', location='地库', status='available'),
+                ParkingSpace(community_id=1, building_id=building.id, code='A-002', location='地库', status='occupied'),
             ])
             db.commit()
 
