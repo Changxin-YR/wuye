@@ -243,7 +243,8 @@ class LeaseCreateProviderTests(unittest.TestCase):
         callbacks = []
         responses = iter([
             {'id': 'la-1', 'choices': [{'message': {'role': 'assistant', 'content': '先核对房屋。'}}]},
-            {'id': 'la-2', 'choices': [{'message': {'role': 'assistant', 'content': '发现同名租户，请补充联系电话。'}}]},
+            {'id': 'la-2', 'choices': [{'message': {'role': 'assistant', 'content': '发现同名租户，正在停止写入。'}}]},
+            {'id': 'la-3', 'choices': [{'message': {'role': 'assistant', 'content': '发现同名租户，请补充联系电话。'}}]},
         ])
 
         def tool(args):
