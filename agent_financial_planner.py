@@ -10,6 +10,7 @@ PropertyService; it never grants permissions.
 from datetime import datetime, timedelta, timezone
 import re
 
+from agent_lease_patch import repair_lease_create_plan
 from agent_vehicle_patch import repair_vehicle_save_plan
 
 
@@ -340,6 +341,7 @@ def repair_financial_plan(text, result, authorized_commands):
     result = repair_read_plan(text, result, authorized_commands)
     result = repair_semantic_read_filters(text, result)
     result = repair_vehicle_save_plan(text, result, authorized_commands)
+    result = repair_lease_create_plan(text, result, authorized_commands)
     authorized = set(authorized_commands or ())
     intent = result.get('intent')
 
