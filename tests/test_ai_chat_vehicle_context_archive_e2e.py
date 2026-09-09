@@ -178,6 +178,51 @@ class AiChatVehicleContextArchiveTests(unittest.TestCase):
                 AuditLog.status == 'success',
             ).order_by(AuditLog.id.desc()))
             self.assertIsNotNone(execute_audit)
+            self.assertEqual(len(db.scalars(select(AiAction).where(
+                AiAction.command == 'vehicle.archive'
+            )).all()), 1)
+
+        # Stale conversational context remains useful, but the archived vehicle
+        # is no longer a writable resolver result because Policy excludes
+        # soft-deleted records. The Agent must re-check state and stop before a
+        # second confirmation proposal instead of forgetting the plate or
+        # replaying the old internal id/version.
+        retry_calls = []
+
+        def retry_response(*args, **kwargs):
+            retry_calls.append((args, kwargs))
+            return {
+                'id': f'vehicle-context-retry-{len(retry_calls)}',
+                'choices': [{'message': {'content': '我重新核对当前车辆状态。'}}],
+            }
+
+        with patch.object(self.provider, '_request', side_effect=retry_response):
+            fourth = self.chat('把刚才那辆车再归档一次，原因重复测试', conversation_id)
+
+        self.assertEqual(fourth.status_code, 200, fourth.text[:2200])
+        self.assertEqual(fourth.json.get('source'), 'bailian', fourth.text[:2200])
+        self.assertGreater(len(retry_calls), 0, 'stale retry must re-enter the vehicle resolver flow')
+        retry_pending = [
+            item for item in fourth.json.get('actions', [])
+            if item.get('command') == 'vehicle.archive' and item.get('status') == 'pending'
+        ]
+        self.assertEqual(retry_pending, [], fourth.text[:2200])
+
+        with self.factory() as db:
+            vehicle = db.get(Vehicle, self.vehicle_id)
+            self.assertTrue(vehicle.deleted)
+            self.assertEqual(vehicle.status, 'archived')
+            archive_actions = db.scalars(select(AiAction).where(
+                AiAction.command == 'vehicle.archive'
+            )).all()
+            self.assertEqual(len(archive_actions), 1)
+            self.assertEqual(archive_actions[0].status, 'executed')
+            archive_audits = db.scalars(select(AuditLog).where(
+                AuditLog.source == 'agent',
+                AuditLog.action == 'vehicle.archive',
+                AuditLog.status == 'success',
+            )).all()
+            self.assertEqual(len(archive_audits), 1)
 
 
 if __name__ == '__main__':
