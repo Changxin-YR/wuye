@@ -72,6 +72,69 @@ def _install_new_tenant_scope_patch():
     dify_client._lease_new_tenant_scope_patch_installed = True
 
 
+def _store_runtime_person_disambiguation(hint):
+    """Persist only user-visible lease facts after a runtime same-name collision.
+
+    A completed lease plan normally clears planner pending state. If person.search
+    later returns multiple rows, the next turn still needs the original house and
+    lease dates, but it must not remember any model-selected database identifier.
+    The unbound pending entry is attached to the conversation by the existing
+    state machine on the next request.
+    """
+    if not has_request_context():
+        return
+    try:
+        from agent_planner_state import _store_pending
+    except Exception:  # pragma: no cover - provider-only unit tests
+        return
+    values = dict((hint or {}).get('arguments') or {})
+    for key in ('person_id', 'person_ids', 'house_id', 'id', 'version'):
+        values.pop(key, None)
+    _store_pending({
+        'action': 'DISAMBIGUATE',
+        'intent': 'lease.create',
+        'candidates': ['house.search', 'person.search', 'lease.create'],
+        'missing_fields': ['disambiguation'],
+        'entity_status': 'AMBIGUOUS',
+        'arguments': values,
+    })
+
+
+def _install_runtime_pending_patch():
+    """Observe resolver results without changing Provider execution semantics."""
+    import dify_client
+
+    if getattr(dify_client, '_lease_runtime_pending_patch_installed', False):
+        return
+    client_cls = getattr(dify_client, 'BailianClient', None)
+    if client_cls is None or not hasattr(client_cls, '_run_tool_call'):
+        return
+    original_run_tool_call = client_cls._run_tool_call
+
+    def lease_run_tool_call(self, call, tool_callback, seen_tool_calls, completed_commands):
+        args, result = original_run_tool_call(
+            self, call, tool_callback, seen_tool_calls, completed_commands
+        )
+        hint = dify_client._PLANNER_HINT.get() or {}
+        if (
+            hint.get('intent') == 'lease.create'
+            and hint.get('entity_status') == 'RESOLVE_MULTI'
+            and isinstance(args, dict)
+            and args.get('operation') == 'lookup'
+            and args.get('command') == 'person.search'
+            and isinstance(result, dict)
+            and result.get('ok') is not False
+        ):
+            data = result.get('data')
+            items = data.get('items') if isinstance(data, dict) else None
+            if isinstance(items, list) and len(items) > 1:
+                _store_runtime_person_disambiguation(hint)
+        return args, result
+
+    client_cls._run_tool_call = lease_run_tool_call
+    dify_client._lease_runtime_pending_patch_installed = True
+
+
 def _copy_plan(result):
     copied = dict(result)
     copied['candidates'] = list(result.get('candidates') or [])
@@ -154,10 +217,12 @@ def repair_multi_tenant_lease_plan(text, result, authorized_commands):
 
     if result.get('intent') == 'lease.create' and result.get('entity_status') == 'RESOLVE_MULTI' and result.get('action') == 'TOOL':
         _install_new_tenant_scope_patch()
+        _install_runtime_pending_patch()
         _cache_completed_plan(text, result)
         return result
 
     restored = _restore_completed_plan(text, result, authorized_commands)
     if restored is not result:
         _install_new_tenant_scope_patch()
+        _install_runtime_pending_patch()
     return restored
