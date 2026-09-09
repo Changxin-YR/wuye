@@ -2,6 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+import agent_lease_checkout_patch
 from agent_planner import plan_request
 from dify_client import BailianClient, _PLANNER_HINT
 
@@ -24,10 +25,15 @@ def tool_call(call_id, operation, command, arguments):
 class LeaseCheckoutResolveTests(unittest.TestCase):
     AUTHORIZED = {'lease.search', 'lease.checkout'}
 
-    def test_complete_checkout_resolves_active_lease_before_confirmation(self):
+    def install_patch(self):
         plan = plan_request('王五已经搬走了，办理退租，原因合同到期', self.AUTHORIZED, {})
         self.assertEqual((plan['intent'], plan['action']), ('lease.checkout', 'CONFIRM'))
         self.assertEqual(plan['entity_status'], 'RESOLVE_FIRST')
+        agent_lease_checkout_patch._install_provider_patch()
+        return plan
+
+    def test_complete_checkout_resolves_active_lease_before_confirmation(self):
+        plan = self.install_patch()
         self.assertEqual(plan['candidates'], ['lease.search', 'lease.checkout'])
         self.assertEqual(plan['arguments']['person_name'], '王五')
         self.assertEqual(plan['arguments']['status'], 'active')
@@ -44,6 +50,7 @@ class LeaseCheckoutResolveTests(unittest.TestCase):
         self.assertNotIn('version', plan['arguments'])
 
     def test_model_cannot_guess_lease_id_version_or_reason(self):
+        self.install_patch()
         client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
         callbacks = []
         responses = iter([
@@ -118,6 +125,7 @@ class LeaseCheckoutResolveTests(unittest.TestCase):
         self.assertEqual(result['execution_state'], 'PENDING_CONFIRMATION')
 
     def test_ambiguous_active_leases_stop_before_proposal(self):
+        self.install_patch()
         client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
         callbacks = []
         responses = iter([
