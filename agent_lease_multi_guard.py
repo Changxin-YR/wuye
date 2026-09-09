@@ -202,6 +202,9 @@ def repair_multi_tenant_lease_plan(text, result, authorized_commands):
                 'arguments': {},
             }
 
+        # Rebuild only from explicit visible lease facts. Any name/phone that the
+        # single-person parser happened to pick from the list is intentionally
+        # discarded; IDs and versions are never accepted here either.
         values = dict(parse_lease_business_facts(text, require_intent=False) or {})
         for key in ('person_name', 'phone', 'person_id', 'person_ids', 'house_id', 'id', 'version'):
             values.pop(key, None)
