@@ -142,6 +142,21 @@ class BusinessTargetMemoryTests(unittest.TestCase):
         self.assertEqual(changed_auth['action'], 'CLARIFY')
         self.assertNotIn('plate', changed_auth['arguments'])
 
+    def test_real_planner_reuses_explicit_visitor_id_for_contextual_checkin(self):
+        authorized = {'visitor.search', 'visitor.checkin'}
+        first = self.plan('查询访客记录#23', authorized)
+        self.assertEqual(first['intent'], 'visitor.search')
+        self.assertEqual(first['arguments']['id'], 23)
+
+        second = self.plan('确认刚才的访客进入', authorized, conversation_id='conv-visitor')
+        self.assertEqual(second['intent'], 'visitor.checkin')
+        self.assertEqual(second['action'], 'TOOL')
+        self.assertEqual(second['entity_status'], 'RESOLVE_FIRST')
+        self.assertEqual(second['arguments']['id'], 23)
+        self.assertEqual(second['arguments']['status'], 'registered')
+        self.assertEqual(second['candidates'], ['visitor.search', 'visitor.checkin'])
+        self.assertNotIn('version', second['arguments'])
+
     def test_real_planner_reuses_vehicle_plate_without_exposing_internal_id(self):
         authorized = {'vehicle.search', 'vehicle.archive'}
         first = self.plan('查一下车牌粤A12345的车辆', authorized)
