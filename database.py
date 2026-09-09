@@ -21,6 +21,8 @@ def make_engine(url):
 def _type_signature(value):
     typ=getattr(value,'type',value)
     visit=getattr(typ,'__visit_name__',typ.__class__.__name__.lower()).lower()
+    # MySQL reflects Boolean columns as TINYINT(1); keep the contract semantic.
+    if visit=='tinyint' and getattr(typ,'display_width',None)==1:visit='boolean'
     visit={'varchar':'string','char':'string','nvarchar':'string','bigint':'integer','smallint':'integer','tinyint':'integer','numeric':'decimal'}.get(visit,visit)
     return (visit,getattr(typ,'length',None),getattr(typ,'precision',None),getattr(typ,'scale',None))
 

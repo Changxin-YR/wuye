@@ -2,16 +2,22 @@ from database_fixture import test_database
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from sqlalchemy import inspect,select,text
+from sqlalchemy import Boolean, inspect,select,text
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateTable,CreateIndex
 from sqlalchemy.dialects import mysql
 from app import create_app
-from database import make_engine,initialize,missing_schema,upgrade,schema_contract_drift
+from database import make_engine,initialize,missing_schema,upgrade,schema_contract_drift,_type_signature
 from models import Base,User,House,WorkOrder
 from fixtures import legacy_models as old
 
 class MigrationTests(unittest.TestCase):
+    def test_mysql_boolean_reflection_matches_boolean_contract(self):
+        class ReflectedTinyInt:
+            __visit_name__='tinyint'
+            display_width=1
+        self.assertEqual(_type_signature(ReflectedTinyInt()),_type_signature(Boolean()))
+
     def setUp(self):
         self.temp=TemporaryDirectory();self.url='sqlite+pysqlite:///'+str(Path(self.temp.name)/'migration.db');self.url=test_database(self,self.url);self.engine=make_engine(self.url)
     def tearDown(self):self.engine.dispose();self.temp.cleanup()
