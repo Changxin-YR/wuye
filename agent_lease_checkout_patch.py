@@ -210,6 +210,17 @@ def repair_lease_checkout_plan(text, result, authorized_commands):
         )
         return shown
 
+    if 'lease.checkout' in authorized and 'lease.search' not in authorized:
+        return {
+            'action': 'CLARIFY',
+            'intent': 'lease.checkout',
+            'candidates': candidates,
+            'missing_fields': ['lease'],
+            'entity_status': 'MISSING',
+            'arguments': values,
+            'clarification_text': '当前无法安全定位唯一活动租约，请补充房屋信息或稍后重试。',
+        }
+
     if not all(command in authorized for command in required):
         return {
             'action': 'DENY',
