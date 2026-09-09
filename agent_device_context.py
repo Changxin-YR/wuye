@@ -18,6 +18,8 @@ except Exception:  # pragma: no cover
     def has_request_context():
         return False
 
+from agent_business_context import repair_business_current_plan
+
 
 _TTL_SECONDS = 600
 _LIMIT = 256
@@ -103,7 +105,8 @@ def _get_code():
 
 
 def repair_device_current_plan(text, result, authorized_commands):
-    """Remember exact device reads and safely resume pronoun inspection requests."""
+    """Remember visible business targets and safely resume contextual requests."""
+    result = repair_business_current_plan(text, result, authorized_commands)
     values = dict(result.get('arguments') or {})
     intent = result.get('intent')
 
