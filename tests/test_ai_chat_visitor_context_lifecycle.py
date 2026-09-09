@@ -6,6 +6,8 @@ from unittest.mock import patch
 from sqlalchemy import func, select
 from werkzeug.security import generate_password_hash
 
+import agent_tools
+import app as app_module
 from app import create_app
 from database_fixture import test_database
 from dify_client import BailianClient
@@ -118,18 +120,42 @@ class AiChatVisitorContextLifecycleTests(unittest.TestCase):
             self.assertIsNone(visitor.check_in)
             self.assertIsNone(visitor.check_out)
 
+        lookup_calls = []
+        perform_calls = []
+        original_query = app_module.domain_query
+        original_perform = agent_tools.perform
+
+        def query_spy(db, actor, command, params):
+            result = original_query(db, actor, command, params)
+            if command == 'visitor.search':
+                lookup_calls.append({'params': dict(params), 'result': result})
+            return result
+
+        def perform_spy(db, actor, grant, command, params):
+            if command.startswith('visitor.'):
+                perform_calls.append({'command': command, 'params': dict(params)})
+            return original_perform(db, actor, grant, command, params)
+
         checkin_responses = iter([
             {'id': 'visitor-in-1', 'choices': [{'message': {'content': '我重新核对刚才的访客。'}}]},
             {'id': 'visitor-in-2', 'choices': [{'message': {'content': '状态允许入场，执行登记。'}}]},
             {'id': 'visitor-in-3', 'choices': [{'message': {'content': '访客已登记进入。'}}]},
         ])
-        with patch.object(self.provider, '_request', side_effect=lambda *a, **k: next(checkin_responses)):
+        with (
+            patch.object(app_module, 'domain_query', side_effect=query_spy),
+            patch.object(agent_tools, 'perform', side_effect=perform_spy),
+            patch.object(self.provider, '_request', side_effect=lambda *a, **k: next(checkin_responses)),
+        ):
             second = self.chat('确认刚才的访客进入', conversation_id)
         self.assertEqual(second.status_code, 200, second.text[:2200])
-        self.assertTrue(any(
+        executed_checkin = any(
             item.get('command') == 'visitor.checkin' and item.get('status') == 'executed'
             for item in second.json.get('actions', [])
-        ), second.text[:2200])
+        )
+        self.assertTrue(
+            executed_checkin,
+            f'lookup_calls={lookup_calls!r}; perform_calls={perform_calls!r}; response={second.text[:2200]}',
+        )
 
         with self.factory() as db:
             visitor = db.get(Visitor, self.visitor_id)
