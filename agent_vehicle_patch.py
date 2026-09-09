@@ -5,6 +5,7 @@ house address. Database identifiers are selected by scoped read tools and are
 never accepted from the model for the final vehicle.save call.
 """
 import json
+import re
 
 
 def _install_provider_patch():
@@ -93,12 +94,61 @@ def _question(slot):
     return '还缺车牌号，请直接告诉我完整车牌号。'
 
 
+def _vehicle_business_facts(text):
+    """Recover only explicit user-visible vehicle facts from the original utterance."""
+    value = str(text or '').strip()
+    if not re.search(r'(?:登记|新增|新建|录入).{0,12}(?:车牌|车辆)|(?:车牌|车辆).{0,12}(?:登记|新增|新建|录入)', value):
+        return None
+    facts = {}
+    plate = re.search(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5}', value, re.I)
+    owner = re.search(r'车主(?:是|为|：|:)?\s*([\u4e00-\u9fff]{2,4})', value)
+    building = re.search(r'([A-Za-z0-9一二三四五六七八九十百]+)\s*(?:栋|号楼)', value)
+    unit = re.search(r'([0-9一二三四五六七八九十百]+)\s*单元', value)
+    room = re.search(r'(?:单元\s*)?([0-9]{2,4})\s*(?:房|室)', value)
+    phone = re.search(r'1[3-9]\d{9}', value)
+    model = re.search(r'(?:车型|车辆型号|型号)(?:是|为|：|:)?\s*([^，,。；;]{1,50})', value)
+    if plate:
+        facts['plate'] = plate.group(0).upper()
+    if owner:
+        facts['person_name'] = owner.group(1)
+    if building:
+        facts['building_name'] = building.group(1) + '栋'
+    if unit:
+        facts['unit'] = unit.group(1)
+    if room:
+        facts['room_no'] = int(room.group(1))
+    if phone:
+        facts['phone'] = phone.group(0)
+    if model:
+        facts['model'] = model.group(1).strip()
+    return facts
+
+
 def repair_vehicle_save_plan(text, result, authorized_commands):
     """Turn vehicle registration into two scoped lookups followed by one write."""
-    if result.get('intent') != 'vehicle.save' or result.get('action') == 'DENY':
+    authorized = set(authorized_commands or ())
+
+    # Never weaken an existing ambiguity decision. A duplicate resident name
+    # must still be disambiguated before any write workflow can continue.
+    if result.get('intent') == 'vehicle.save' and result.get('action') == 'DISAMBIGUATE':
         return result
 
-    values = dict(result.get('arguments') or {})
+    facts = _vehicle_business_facts(text)
+    if result.get('intent') == 'vehicle.save':
+        if result.get('action') == 'DENY':
+            return result
+        values = dict(result.get('arguments') or {})
+        if facts:
+            for key, value in facts.items():
+                if value not in (None, ''):
+                    values[key] = value
+    elif facts is not None and 'vehicle.save' in authorized:
+        # Repair an earlier generic house-create collision. We intentionally
+        # discard that plan's arguments and rebuild only from the user's text.
+        values = dict(facts)
+    else:
+        return result
+
     # IDs and versions are server-owned for this Agent flow even if a model or
     # stale upstream plan tried to place them in the argument map.
     for key in ('house_id', 'person_id', 'id', 'version'):
@@ -115,7 +165,6 @@ def repair_vehicle_save_plan(text, result, authorized_commands):
         missing.append('vehicle')
 
     required = ('house.search', 'person.search', 'vehicle.save')
-    authorized = set(authorized_commands or ())
     candidates = [command for command in required if command in authorized]
     if missing:
         return {
