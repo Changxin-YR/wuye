@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - planner tests can run without Flask
     def has_request_context():
         return False
 
+from agent_complaint_create_patch import repair_complaint_create_plan
 from agent_device_context import repair_device_current_plan
 from agent_lease_patch import is_lease_create_text, parse_lease_business_facts
 from agent_visitor_patch import repair_visitor_host_plan
@@ -184,6 +185,7 @@ def _restore_completed_plan(text, result, authorized_commands):
 def repair_multi_tenant_lease_plan(text, result, authorized_commands):
     """Keep lease tenant resolution server-owned and fail closed on person lists."""
     result = repair_device_current_plan(text, result, authorized_commands)
+    result = repair_complaint_create_plan(text, result, authorized_commands)
     result = repair_visitor_host_plan(text, result, authorized_commands)
     if result.get('intent') == 'visitor.create':
         return result
