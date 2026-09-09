@@ -105,7 +105,7 @@ class AiChatLeaseDisambiguationTests(unittest.TestCase):
             'phone': phone,
         })['id']
 
-    def test_same_name_stops_locally_then_phone_followup_resumes_original_lease(self):
+    def test_same_name_resolver_stops_write_then_phone_followup_resumes_original_lease(self):
         house_id = self.make_house()
         selected_id = self.make_person('13800000123')
         other_id = self.make_person('13800000124')
@@ -118,14 +118,18 @@ class AiChatLeaseDisambiguationTests(unittest.TestCase):
         provider = BailianClient('http://agent.invalid', 'fixture-key', 'qwen-plus')
         self.app.extensions['dify'] = provider
 
-        def forbidden(*args, **kwargs):
-            raise AssertionError('same-name disambiguation must stay local before any external model call')
-
-        with patch.object(provider, '_request', side_effect=forbidden):
+        # The first turn may safely use scoped read resolvers. It must stop after
+        # person.search returns multiple candidates and must never call lease.create.
+        first_responses = iter([
+            {'id': 'lease-dis-1', 'choices': [{'message': {'content': '我先核对目标房屋。'}}]},
+            {'id': 'lease-dis-2', 'choices': [{'message': {'content': '我再核对同小区租户。'}}]},
+            {'id': 'lease-dis-3', 'choices': [{'message': {'content': '找到多个同名租户，请补充联系电话。'}}]},
+        ])
+        with patch.object(provider, '_request', side_effect=lambda *args, **kwargs: next(first_responses)):
             first = self.chat(full_request)
 
         self.assertEqual(first.status_code, 200, first.text[:1800])
-        self.assertEqual(first.json['source'], 'planner')
+        self.assertNotEqual(first.json.get('source'), 'planner', first.text[:1800])
         self.assertTrue(first.json['conversation_id'])
         self.assertEqual(first.json['actions'], [])
         self.assertTrue('多个' in first.json['answer'] or '同名' in first.json['answer'])
@@ -135,13 +139,13 @@ class AiChatLeaseDisambiguationTests(unittest.TestCase):
             self.assertEqual(db.scalar(select(func.count(Lease.id)).where(Lease.house_id == house_id)), 0)
             self.assertEqual(db.get(House, house_id).occupancy, 'vacant')
 
-        responses = iter([
+        second_responses = iter([
             {'id': 'lease-da-1', 'choices': [{'message': {'content': '我先核对房屋。'}}]},
             {'id': 'lease-da-2', 'choices': [{'message': {'content': '我按联系电话核对租户。'}}]},
             {'id': 'lease-da-3', 'choices': [{'message': {'content': '对象已唯一，开始办理。'}}]},
             {'id': 'lease-da-4', 'choices': [{'message': {'content': '租户入住已登记。'}}]},
         ])
-        with patch.object(provider, '_request', side_effect=lambda *args, **kwargs: next(responses)):
+        with patch.object(provider, '_request', side_effect=lambda *args, **kwargs: next(second_responses)):
             second = self.chat('联系电话13800000123', first.json['conversation_id'])
 
         self.assertEqual(second.status_code, 200, second.text[:1800])
