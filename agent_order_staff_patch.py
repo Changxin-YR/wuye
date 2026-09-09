@@ -173,7 +173,10 @@ def _install_staff_pending_intent_boundary_patch():
     original = state._looks_like_continuation
 
     def staff_safe_continuation(text, pending):
-        pending_intent = getattr(pending, 'intent', None)
+        pending_intent = (
+            pending.get('intent') if isinstance(pending, dict)
+            else getattr(pending, 'intent', None)
+        )
         if pending_intent in _STAFF_DOMAINS:
             detected = _detect_intent(str(text or '').strip())
             if detected and detected != pending_intent:
