@@ -10,6 +10,8 @@ PropertyService; it never grants permissions.
 from datetime import datetime, timedelta, timezone
 import re
 
+from agent_vehicle_patch import repair_vehicle_save_plan
+
 
 def _china_today():
     return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
@@ -337,6 +339,7 @@ def repair_financial_plan(text, result, authorized_commands):
     result = repair_resident_directory_plan(text, result, authorized_commands)
     result = repair_read_plan(text, result, authorized_commands)
     result = repair_semantic_read_filters(text, result)
+    result = repair_vehicle_save_plan(text, result, authorized_commands)
     authorized = set(authorized_commands or ())
     intent = result.get('intent')
 
