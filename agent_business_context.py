@@ -30,6 +30,10 @@ _CONTEXT_RE = re.compile(
     r'刚才|刚刚|这个|这条|这位|这辆|这台|这张|这笔|该(?:投诉|访客|车辆|车位|租约|账单|收款|工单|设备|巡检)|'
     r'上一(?:条|张|笔|个)|刚登记|刚创建|刚办理|刚查(?:到|的)?'
 )
+_CONTEXTUAL_BILL_VOID_RE = re.compile(
+    r'(?:把|将)?(?:刚才|刚刚|这个|这张|该|上一张)[^，,。；;]{0,12}账单[^，,。；;]{0,12}作废'
+    r'|作废[^，,。；;]{0,12}(?:刚才|刚刚|这个|这张|该|上一张)[^，,。；;]{0,12}账单'
+)
 _VISITOR_STATE_WRITES = {'visitor.checkin', 'visitor.checkout', 'visitor.cancel'}
 
 
@@ -325,6 +329,39 @@ def _promote_context_target(result, domain, authorized_commands):
     return repaired
 
 
+def _repair_contextual_intent(text, result, authorized_commands):
+    """Recover narrow contextual write intents before target-memory lookup.
+
+    The stable core intentionally recognizes explicit ``账单123作废`` wording.
+    Operators also naturally say ``把刚才这张账单作废`` after an exact read.
+    That phrasing must enter the bill domain before current-object memory can
+    safely supply the already-visible business selector. This helper never picks
+    a bill itself and never creates an id/version; it only classifies the intent.
+    """
+    if not isinstance(result, dict) or result.get('intent') != 'unknown':
+        return result
+    if not _CONTEXTUAL_BILL_VOID_RE.search(str(text or '')):
+        return result
+    authorized = set(authorized_commands or ())
+    if 'bill.void' not in authorized:
+        return {
+            'action': 'DENY',
+            'intent': 'bill.void',
+            'candidates': [],
+            'missing_fields': [],
+            'entity_status': 'FORBIDDEN',
+            'arguments': {},
+        }
+    return {
+        'action': 'CLARIFY',
+        'intent': 'bill.void',
+        'candidates': ['bill.void'],
+        'missing_fields': ['bill'],
+        'entity_status': 'MISSING',
+        'arguments': {},
+    }
+
+
 def repair_business_current_plan(text, result, authorized_commands):
     """Reuse a visible target only inside the same domain and conversation.
 
@@ -334,6 +371,7 @@ def repair_business_current_plan(text, result, authorized_commands):
     """
     if not isinstance(result, dict):
         return result
+    result = _repair_contextual_intent(text, result, authorized_commands)
     intent = result.get('intent')
     if intent in {'unknown', 'security_boundary'} or result.get('action') == 'DENY':
         return result
