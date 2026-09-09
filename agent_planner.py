@@ -1,332 +1,640 @@
-"""Small deterministic planner that narrows model choices without authorizing them."""
+"""Semantic compatibility layer around the stateful deterministic planner.
 
+The state machine and frozen planner remain in ``agent_planner_state`` and
+``agent_planner_core``. This layer repairs broad Chinese business phrases,
+turns safe contextual references into scoped resolver workflows, and presents
+missing slots as concise operator-style questions. It never grants permissions
+or bypasses backend Policy/DataScope.
+"""
 import re
 
-from agent_security import risk_for
+try:
+    from flask import current_app, has_request_context, request
+except Exception:  # pragma: no cover
+    current_app = None
+    request = None
+    def has_request_context():
+        return False
 
-_CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
-
-
-def building_name_variants(name):
-    """Return common persisted forms for a spoken building name."""
-    if not isinstance(name, str) or not name.strip():
-        return set()
-    value = name.strip()
-    variants = {value, value.removesuffix("栋"), value.removesuffix("号楼")}
-    core = re.sub(r"(?:栋|号楼)$", "", value)
-    if core.isdigit():
-        number = int(core)
-    elif core and all(char in _CN_DIGITS or char == "十" for char in core):
-        if core == "十":
-            number = 10
-        elif "十" in core:
-            left, _, right = core.partition("十")
-            number = (_CN_DIGITS.get(left, 1) * 10 if left else 10) + (_CN_DIGITS.get(right, 0) if right else 0)
-        else:
-            number = _CN_DIGITS.get(core)
-    else:
-        number = None
-    if number is not None:
-        variants.update({str(number), f"{number}栋", f"{number}号楼"})
-    return variants
-
-
-ALIASES = (
-    # Specific actions must precede generic words such as "工单" and "投诉".
-    ("relation.bind_by_name", ("绑定", "业主")),
-    ("property.archive", ("归档",)),
-    ("visitor.checkin", ("访客", "进入")),
-    ("order.finish", ("提交完工", "完工")),
-    ("complaint.resolve", ("投诉", "修好")),
-    ("order.assign", ("派给", "派单", "分配维修")),
-    ("order.accept", ("接单", "开始维修")),
-    ("order.progress", ("记录进度", "维修进度", "记一下进展", "更新进展")),
-    ("order.reopen", ("返修", "还是漏水")),
-    ("order.close", ("验收", "关闭这个工单")),
-    ("lease.checkout", ("搬走", "退租", "退房", "不住了", "租约结束")),
-    ("parking.assign", ("车位", "停车位")),
-    ("inspection.complete", ("巡检", "发现故障", "巡查")),
-    ("complaint.create", ("登记投诉", "投诉")),
-    ("visitor.create", ("登记访客", "访客")),
-    ("vehicle.save", ("登记车牌", "车牌")),
-    ("device.save", ("登记设备", "设备")),
-    ("payment.reverse", ("冲销", "冲正", "撤回上一笔收款", "撤回收款")),
-    ("payment.record", ("收款", "已收款")),
-    ("bill.batch", ("生成物业费账单", "批量生成账单", "批量算", "批量计算", "批量出账")),
-    ("bill.lookup", ("物业费账单", "账单")),
-    ("notice.archive", ("撤掉公告", "撤下公告", "撤回公告", "删除公告")),
-    ("notice.batch_publish", ("负责的所有小区", "所有负责小区", "所有小区发布公告", "所有小区发公告")),
-    ("notice.save", ("发布公告", "发布", "发个", "发一条", "通知", "提醒", "修改公告", "改公告", "公告改")),
-    ("notice.lookup", ("公告", "通知")),
-    ("person.save", ("手机号改", "修改手机号", "联系方式改", "电话换")),
-    ("person.lookup", ("找人", "查找人员", "找")),
-    ("order.create", ("报修", "维修", "漏水", "坏了", "叫师傅", "工单")),
-    ("order.lookup", ("工单", "到哪一步")),
-    ("house.lookup", ("查询房", "查房", "房屋信息", "住户信息", "这个房子", "空置")),
+from agent_planner_state import *
+from agent_planner_state import (
+    _store_pending,
+    clear_pending_plan,
+    plan_request as _state_plan_request,
+    visitor_expected_at,
+    visitor_purpose,
 )
-CANONICAL = {
-    "house.lookup": "house.search",
-    "person.lookup": "person.search",
-    "order.lookup": "order.search",
-    "notice.lookup": "notice.read",
-    "bill.lookup": "billing.unpaid",
+from agent_planner_core import CONFIRM_INTENTS, _candidates
+
+
+_CONTEXT_WORDS = re.compile(r'刚才|刚刚|这个|这个人|这个房|这个工单|这张单|上一笔|最近一笔|上一个|今天的|当前的|已经离开|已经报废|可以进|进去了|处理结果|回访|结案|返修|撤回')
+_CONTEXT_RESOLVERS = {
+    'order.assign': ('order.search', 'staff.search'),
+    'order.accept': ('order.search',),
+    'order.progress': ('order.search',),
+    'order.finish': ('order.search',),
+    'order.reopen': ('order.search',),
+    'order.close': ('order.search',),
+    'order.cancel': ('order.search',),
+    'complaint.resolve': ('complaint.search',),
+    'complaint.close': ('complaint.search',),
+    'visitor.checkin': ('visitor.search',),
+    'visitor.checkout': ('visitor.search',),
+    'visitor.cancel': ('visitor.search',),
+    'vehicle.archive': ('vehicle.search',),
+    'device.archive': ('device.search',),
+    'inspection.complete': ('inspection.search', 'device.search'),
+    'payment.reverse': ('payment.search',),
+    'bill.void': ('billing.unpaid',),
 }
 
 
-def _first_command(message, authorized):
-    for command, words in ALIASES:
-        actual = CANONICAL.get(command, command)
-        if command not in authorized and actual not in authorized:
-            continue
-        if command == "relation.bind_by_name":
-            matched = ("绑定" in message or "登记成" in message or bool(re.search(r"手机号\s*1[3-9]\d{9}\s*的", message))) and not ("不要" in message and "只" in message)
-        elif command == "visitor.checkin":
-            matched = "进入" in message or "签到" in message or ("确认" in message and "访客" in message)
-        elif command == "complaint.resolve":
-            matched = "修好" in message or "处理结果" in message
-        elif command == "order.lookup":
-            matched = "到哪一步" in message or "谁负责" in message or "查看工单" in message or "我的工单" in message
-            if "工单" in message and not any(word in message for word in ("报修", "提交", "派给", "派单", "完工", "返修", "验收", "进展")):
-                matched = True
-        elif command == "house.lookup":
-            matched = bool(re.search(r"(?:查询|查|看看|瞅|瞧|看下|查下).*(?:栋|楼|房|室|谁住)", message))
-            matched = matched or any(word in message for word in words if word in {"这个房子", "空置"})
-            matched = matched or ("当前绑定情况" in message)
-        elif command == "notice.lookup":
-            matched = any(word in message for word in words) and "发布" not in message and not re.search(r"通知\s*(?:所有|大家|一下)|提醒|发(?:个|一条)", message) and not ("标题" in message and "内容" in message)
-        elif command == "notice.archive":
-            matched = bool(re.search(r"撤掉|撤下|撤回|删除", message)) and "公告" in message
-        elif command in {"notice.save", "notice.batch_publish"}:
-            explicit_fields = "标题" in message and "内容" in message
-            write_verb = bool(re.search(r"发布|发(?:个|一条|个)?|通知|提醒|修改公告|改公告|公告.*改", message)) or explicit_fields
-            read_verb = bool(re.search(r"查询|查看|看看|查一下|查下|查查|最近|有哪些|有什么|历史", message))
-            notice_subject = bool(re.search(r"公告|通知|全区|全小区|所有业主|所有住户|停水|停电|电梯检修|高空抛物", message)) or explicit_fields
-            if command == "notice.batch_publish":
-                matched = bool(re.search(r"负责的所有小区|所有负责小区|所有小区", message)) and write_verb and not read_verb
-            else:
-                matched = write_verb and notice_subject and not read_verb
-        elif command == "order.create":
-            matched = any(word in message for word in words)
-            if "工单" in message and not any(
-                word in message for word in ("报修", "维修", "漏水", "坏了", "叫师傅", "新增", "新建", "提交")
-            ):
-                matched = False
-        else:
-            matched = any(word in message for word in words)
-        if matched:
-            return actual
-    return None
-
-
-def _notice_entities(message):
-    """Extract only obvious notice fields; policy and persistence stay server-side."""
-    values = {}
-    community = re.search(r"(?:^|[，,：:\s给到在向至])([\u4e00-\u9fffA-Za-z0-9]{1,20}(?:小区|花园|社区|园区))", message)
-    building = re.search(r"([A-Za-z0-9一二三四五六七八九十百]+)\s*(?:栋|号楼)", message)
-    if community:
-        community_name = re.split(r"到|给|在|向|至", community.group(1))[-1]
-        if not any(token in community_name for token in ("全小区", "所有小区", "负责的所有小区", "所有负责小区")):
-            values["community_name"] = community_name
-    if building:
-        values["building_name"] = building.group(1) + "栋"
-        values["notice_scope"] = "building"
-    elif re.search(r"全区|全小区|全园区|所有业主|所有住户|全体业主|全体住户", message):
-        values["notice_scope"] = "community"
-    else:
-        values["notice_scope"] = "community"
-
-    title_match = re.search(r"标题\s*(?:是|为|：|:)\s*([^，,。；;]+)", message)
-    content_match = re.search(r"内容\s*(?:是|为|：|:)\s*(.+)$", message)
-    if title_match:
-        values["notice_title"] = title_match.group(1).strip()
-    if content_match:
-        values["notice_content"] = content_match.group(1).strip(" \t，,。；;")
-    if "notice_content" not in values:
-        colon = re.search(r"[：:]\s*(.+)$", message)
-        if colon:
-            values["notice_content"] = colon.group(1).strip(" \t，,。；;")
-        else:
-            spoken = re.search(r"(?:通知|提醒)(?:所有业主|所有住户|大家|一下)?[，,:：\s]*(.+)$", message)
-            if spoken:
-                values["notice_content"] = spoken.group(1).strip(" \t，,。；;")
-            else:
-                comma = re.search(r"[，,]\s*(.+)$", message)
-                compact = comma.group(1).strip() if comma else message.strip()
-                compact = re.sub(r"^(?:帮我|请|麻烦)?\s*(?:发布|发个|发一条)\s*(?:一个|一条)?", "", compact).strip()
-                if compact == message.strip():
-                    spoken_publish = re.search(r"(?:发布|发个|发一条)\s*(?:一个|一条)?\s*(?:全区|全小区|全园区)?\s*(.+)$", message)
-                    if spoken_publish:
-                        compact = spoken_publish.group(1).strip()
-                compact = re.sub(r"^(?:全区|全小区|全园区)\s*", "", compact)
-                compact = re.sub(r"(?:公告|通知)$", "", compact).strip("，,。；; ")
-                compact = re.sub(r"^(?:提醒|通知)(?:大家|所有业主|所有住户)?\s*", "", compact)
-                if compact:
-                    values["notice_content"] = compact
-    changed = re.search(r"改成\s*(.+)$", message)
-    if changed:
-        values["notice_content"] = changed.group(1).strip(" \t，,。；;")
-    if "notice_title" not in values and values.get("notice_content"):
-        content = values["notice_content"]
-        keyword = next((word for word in ("停水", "停电", "电梯检修", "电梯", "检修", "高空抛物") if word in content), "物业")
-        values["notice_title"] = keyword + ("提醒" if keyword == "高空抛物" else "公告")
-    return values
-
-
-def _entities(message):
-    building = re.search(r"([A-Za-z0-9一二三四五六七八九十百]+)\s*(?:栋|号楼)", message)
-    unit = re.search(r"([0-9一二三四五六七八九十百]+)\s*单元", message)
-    room = re.search(r"单元\s*([0-9]{2,4})\s*(?:房|室)?", message)
-    if not room:
-        room = re.search(r"(?:栋|号楼)\s*([0-9]{2,4})\s*(?:房|室)?", message)
-    phone = re.search(r"1[3-9]\d{9}", message)
-    plate = re.search(r"[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5}", message, re.I)
-    order_no = re.search(r"WO[-一字母0-9]+", message, re.I)
-    space_code = re.search(r"(?<![A-Za-z0-9])[A-Za-z]+-\d{1,8}(?![A-Za-z0-9])", message)
-    bill_id = re.search(r"(?:账单|收款)\s*#?\s*([1-9][0-9]{0,8})", message)
-    notice_id = re.search(r"(?:公告|通知)\s*#?\s*([1-9][0-9]{0,8})", message)
-    amount = re.search(r"(?:收款|收到|收了)\s*(?:人民币|现金)?\s*([0-9]+(?:\.[0-9]{1,2})?)\s*(?:元|块)", message)
-    person = re.search(r"给\s*([\u4e00-\u9fff]{2,4})\s*绑定", message)
-    person = person or re.search(r"绑定(?:给|到)?\s*([\u4e00-\u9fff]{2,4})", message)
-    person = person or re.search(r"([\u4e00-\u9fff]{2,4})(?=(?:绑定|的手机号|车主|已经搬走|搬走|退租))", message)
-    person = person or re.search(r"手机号\s*1[3-9]\d{9}\s*的\s*([\u4e00-\u9fff]{2,4})", message)
-    person = person or re.search(r"(?:找|车主)\s*([\u4e00-\u9fff]{2,4})", message)
-    person = person or re.search(r"(?:查|查询)\s*([\u4e00-\u9fff]{2,4})(?=的(?:账单|联系方式|电话|手机号))", message)
-    person = person or re.search(r"([\u4e00-\u9fff]{2,4})(?=登记成|的业主)", message)
-    repairer = re.search(r"(?:派给|分配给|交给|安排给)\s*([\u4e00-\u9fff]{2,4})", message)
-    result = {}
-    if building:
-        result["building_name"] = building.group(1) + "栋"
-    if unit:
-        result["unit"] = unit.group(1) + "单元"
-    if room:
-        result["room_no"] = int(room.group(1))
-    if phone:
-        result["phone"] = phone.group(0)
-    if plate:
-        result["plate"] = plate.group(0).upper()
-    if order_no:
-        result["order_no"] = order_no.group(0).upper()
-    if space_code:
-        result["space_code"] = space_code.group(0).upper()
-    if amount:
-        result["amount"] = float(amount.group(1))
-    if bill_id:
-        result["bill_id"] = int(bill_id.group(1))
-    if notice_id:
-        result["notice_id"] = int(notice_id.group(1))
-    if person:
-        person_name=person.group(1).lstrip("把")
-        if person_name not in {"业主", "住户", "人员"}:
-            result["person_name"] = person_name
-    if repairer:
-        result["repairer_name"] = repairer.group(1)
+def _repair_notice_content(text, result):
+    if result.get('intent') != 'notice.save':
+        return result
+    arguments = dict(result.get('arguments') or {})
+    content = arguments.get('notice_content')
+    if isinstance(content, str):
+        cleaned = re.sub(
+            r'^给\s*[A-Za-z0-9一二三四五六七八九十百]+\s*(?:栋|号楼)\s*发(?:个|一条)?\s*',
+            '', content,
+        ).strip(' ，,。；;')
+        if cleaned:
+            arguments['notice_content'] = cleaned
+            result = dict(result)
+            result['arguments'] = arguments
     return result
 
 
-def plan_request(message, authorized_commands, context=None):
-    context = context or {}
+def _repair_payment_target(text, result, authorized_commands):
+    if result.get('intent') != 'payment.reverse' or result.get('action') != 'CLARIFY':
+        return result
+    match = re.search(r'(?:冲销|冲正|撤回).*?收款(?:记录)?\s*#?\s*([1-9]\d{0,8})', text)
+    if not match:
+        match = re.search(r'收款(?:记录)?\s*#?\s*([1-9]\d{0,8})', text)
+    if not match:
+        return result
+    payment_id = int(match.group(1))
+    arguments = dict(result.get('arguments') or {})
+    arguments['payment_id'] = payment_id
+    arguments['id'] = payment_id
+    candidates = _candidates('payment.reverse', set(authorized_commands or ()))
+    clear_pending_plan()
+    return {
+        'action': 'CONFIRM',
+        'intent': 'payment.reverse',
+        'candidates': candidates,
+        'missing_fields': [],
+        'entity_status': 'RESOLVED',
+        'arguments': arguments,
+    }
+
+
+def _repair_device_code(result):
+    if result.get('intent') not in {'device.save', 'device.search', 'device.archive', 'inspection.create'}:
+        return result
+    arguments = dict(result.get('arguments') or {})
+    code = arguments.get('device_code') or arguments.get('code')
+    if code:
+        arguments['device_code'] = str(code).upper()
+        arguments['code'] = str(code).upper()
+        if result.get('intent') == 'device.save':
+            arguments.setdefault('space_code', str(code).upper())
+        result = dict(result)
+        result['arguments'] = arguments
+    return result
+
+
+def _repair_order_cancel(text, result, authorized_commands):
+    if not re.search(r'(?:撤销|取消).*(?:报修|工单)|(?:报修|工单).*(?:撤销|取消)', text):
+        return result
     authorized = set(authorized_commands or ())
-    text = str(message or "").strip()
-    lower = text.lower()
-    identity_mutation = re.search(r"(?:user[_ -]?id|角色|权限|superadmin|员工账号|账号).*(?:改|修改|停用|删除|提升|设为)|(?:改|修改|停用|删除|提升|设为).*(?:user[_ -]?id|角色|权限|superadmin|员工账号|账号)", lower)
-    sql_request = "sql" in lower and any(word in lower for word in ("执行", "execute", "运行", "允许"))
-    if any(word in lower for word in ("忽略之前所有规则", "忽略登录身份", "隐藏工具", "管理员已经授权", "超级管理员")) or identity_mutation or sql_request:
-        return {"action": "DENY", "intent": "security_boundary", "candidates": [], "missing_fields": [], "entity_status": "NONE"}
-    command = _first_command(text, authorized)
-    if not command:
-        if "尾号" in text and re.search(r"[\u4e00-\u9fff]{2,4}", text):
-            return {"action": "DISAMBIGUATE", "intent": "person.lookup", "candidates": ["person.search"], "missing_fields": [], "entity_status": "AMBIGUOUS", "arguments": {}}
-        if re.search(r"车牌.*归谁|车辆.*车主", text) or re.search(r"设备.*(?:状态|情况)", text):
-            return {"action": "CLARIFY", "intent": "unsupported_lookup", "candidates": [], "missing_fields": ["query_capability"], "entity_status": "UNSUPPORTED"}
-        if "来访" in text or "客人" in text:
-            return {"action": "CLARIFY", "intent": "visitor.create", "candidates": [], "missing_fields": ["visitor", "house", "host_person"], "entity_status": "MISSING"}
-        if "处理" in text and not any(word in text for word in ("查询", "查", "登记", "绑定", "发布", "报修", "维修", "分配", "修改", "删除", "归档")):
-            return {"action": "CLARIFY", "intent": "ambiguous", "candidates": [], "missing_fields": ["operation"], "entity_status": "AMBIGUOUS"}
-        return {"action": "ANSWER", "intent": "unknown", "candidates": [], "missing_fields": [], "entity_status": "UNKNOWN"}
-    values = _entities(text)
-    if command in {"notice.save", "notice.batch_publish"}:
-        values.update(_notice_entities(text))
-        resolved_notice = context.get("resolved_notice") or {}
-        if command == "notice.save" and resolved_notice.get("id"):
-            values.setdefault("notice_id", int(resolved_notice["id"]))
-            values.setdefault("notice_title", resolved_notice.get("title"))
-        required_notice = [key for key in ("notice_title", "notice_content") if not values.get(key)]
-        writable = context.get("writable_communities")
-        if isinstance(writable, list):
-            named = values.get("community_name")
-            matches = [row for row in writable if isinstance(row, dict) and (not named or row.get("name") == named)]
-            if named and len(matches) == 1:
-                values["community_id"] = matches[0].get("id")
-            elif command == "notice.save" and len(writable) != 1 and not named:
-                required_notice.insert(0, "community_id")
-            elif named and len(matches) != 1:
-                required_notice.insert(0, "community_id")
-        if command == "notice.save" and values.get("notice_scope") == "building" and context.get("notice_building_candidates") == 0:
-            required_notice.insert(0, "building")
-        if command == "notice.save" and re.search(r"修改公告|改公告|公告.*改|把刚才.*公告", text) and not values.get("notice_id") and not resolved_notice.get("id"):
-            required_notice.insert(0, "notice")
-        if required_notice:
-            return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": required_notice, "entity_status": "MISSING", "arguments": values}
-    if command == "notice.archive" and not values.get("notice_id") and not context.get("resolved_notice"):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["notice"], "entity_status": "MISSING", "arguments": values}
-    if command == "order.create" and any(word in text for word in ("再提交", "再次提交", "再来一次", "重复提交")):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["new_request_details"], "entity_status": "REPEAT", "arguments": values}
-    if command == "person.save":
-        if context.get("person_candidates", 0) > 1:
-            return {"action": "DISAMBIGUATE", "intent": command, "candidates": [command], "missing_fields": [], "entity_status": "AMBIGUOUS", "arguments": values}
-        person = context.get("resolved_person") or {}
-        if person.get("id"):
-            values["id"] = int(person["id"])
-        if "phone" not in values:
-            return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["phone"], "entity_status": "MISSING", "arguments": values}
-        if "id" not in values and not values.get("person_name"):
-            return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["person"], "entity_status": "MISSING", "arguments": values}
-    if command == "relation.bind_by_name":
-        missing = [key for key in ("room_no", "person_name") if key not in values]
-        if "room_no" not in values and "unit" not in values:
-            missing.insert(0, "unit")
-        if missing:
-            return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": missing, "entity_status": "MISSING"}
-        if context.get("person_candidates", 0) > 1:
-            return {"action": "DISAMBIGUATE", "intent": command, "candidates": [command], "missing_fields": [], "entity_status": "AMBIGUOUS", "arguments": values}
-    if context.get("person_candidates", 0) > 1 and values.get("person_name") and command not in {"person.search", "house.search", "order.search", "notice.read"}:
-        return {"action": "DISAMBIGUATE", "intent": command, "candidates": [command], "missing_fields": [], "entity_status": "AMBIGUOUS", "arguments": values}
-    if command == "order.create" and "我家" in text and "building_name" not in values and "room_no" not in values:
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["house"], "entity_status": "MISSING", "arguments": values}
-    if command == "inspection.complete" and not context.get("inspection_id"):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["id", "version"], "entity_status": "MISSING", "arguments": values}
-    if command in {"property.archive", "visitor.checkin"} and not context.get("resolved_entity"):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["id", "version"], "entity_status": "MISSING", "arguments": values}
-    if command == "order.accept" and not values.get("order_no"):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["order"], "entity_status": "MISSING", "arguments": values}
-    has_house_context = context.get("resolved_house") and (context.get("resident_current_house") or any(word in text for word in ("我家", "这个房", "刚才", "该房")))
-    if command == "order.create" and not (values.get("building_name") and values.get("room_no") is not None) and not has_house_context:
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["house"], "entity_status": "MISSING", "arguments": values}
-    if command == "order.assign" and (not values.get("order_no") and not context.get("resolved_order")):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["order"], "entity_status": "MISSING", "arguments": values}
-    if command == "order.assign" and not values.get("repairer_name"):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["repairer"], "entity_status": "MISSING", "arguments": values}
-    has_order_context = context.get("resolved_order") and any(word in text for word in ("这个工单", "刚才", "该工单", "这张单", "记录进度", "返修", "还是漏水"))
-    if command in {"order.progress", "order.finish", "order.reopen", "order.close"} and not values.get("order_no") and not has_order_context:
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["order"], "entity_status": "MISSING", "arguments": values}
-    if command == "complaint.create" and "登记投诉" not in text and not (values.get("building_name") and values.get("room_no") is not None):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["house"], "entity_status": "MISSING", "arguments": values}
-    if command == "visitor.create" and not context.get("resolved_house") and not (values.get("building_name") and values.get("room_no") is not None):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["house"], "entity_status": "MISSING", "arguments": values}
-    if command == "parking.assign" and (not values.get("space_code") or not values.get("plate")):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": [key for key in ("space_code", "plate") if not values.get(key)], "entity_status": "MISSING", "arguments": values}
-    if command == "parking.assign":
-        missing = []
-        if context.get("vehicle_candidates") == 0:
-            missing.append("vehicle")
-        if context.get("parking_candidates") == 0:
-            missing.append("space")
-        if missing:
-            return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": missing, "entity_status": "MISSING", "arguments": values}
-    if command == "payment.reverse" and not values.get("bill_id") and not context.get("resolved_payment"):
-        return {"action": "CLARIFY", "intent": command, "candidates": [command], "missing_fields": ["payment"], "entity_status": "MISSING", "arguments": values}
-    if command in {"bill.batch", "payment.record", "payment.reverse", "notice.batch_publish", "notice.archive"}:
-        action = "CONFIRM"
+    if 'order.cancel' not in authorized:
+        return result
+    resolver = 'order.search' if 'order.search' in authorized else None
+    arguments = dict(result.get('arguments') or {})
+    if not arguments.get('order_no') and not resolver:
+        return {
+            'action': 'CLARIFY', 'intent': 'order.cancel', 'candidates': ['order.cancel'],
+            'missing_fields': ['order'], 'entity_status': 'MISSING', 'arguments': arguments,
+        }
+    candidates = ([resolver] if resolver else []) + ['order.cancel']
+    return {
+        'action': 'CONFIRM',
+        'intent': 'order.cancel',
+        'candidates': candidates,
+        'missing_fields': [],
+        'entity_status': 'RESOLVED' if arguments.get('order_no') else 'RESOLVE_FIRST',
+        'arguments': arguments,
+    }
+
+
+def _repair_order_assign(result, context, authorized_commands):
+    """Resolve the work order and repair worker independently before dispatch."""
+    if result.get('intent') != 'order.assign':
+        return result
+    values = dict(result.get('arguments') or {})
+    if not values.get('repairer_name'):
+        return result
+    resolved_order = (context or {}).get('resolved_order') or {}
+    if not values.get('order_no') and resolved_order.get('id'):
+        values['order_id'] = resolved_order['id']
+    if not (values.get('order_no') or values.get('order_id')):
+        return result
+    authorized = set(authorized_commands or ())
+    required = ('order.search', 'staff.search', 'order.assign')
+    if not all(command in authorized for command in required):
+        return result
+    clear_pending_plan()
+    return {
+        'action': 'TOOL',
+        'intent': 'order.assign',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_MULTI',
+        'arguments': values,
+    }
+
+
+def _repair_complaint_assign(text, result, context, authorized_commands):
+    """Resolve a complaint and an eligible handler without model-supplied IDs."""
+    if result.get('intent') != 'complaint.assign':
+        return result
+    values = dict(result.get('arguments') or {})
+    complaint = re.search(r'投诉(?:单|记录)?\s*#?\s*([1-9]\d{0,8})', text)
+    if complaint:
+        values['complaint_id'] = int(complaint.group(1))
+        values['id'] = int(complaint.group(1))
+    assignee = re.search(r'(?:分给|分派给|交给|派给)\s*([\u4e00-\u9fff]{2,8})', text)
+    if assignee:
+        values['assignee_name'] = assignee.group(1).strip()
+    elif values.get('repairer_name'):
+        values['assignee_name'] = values['repairer_name']
+    resolved = (context or {}).get('resolved_complaint') or {}
+    if not values.get('complaint_id') and resolved.get('id'):
+        values['complaint_id'] = int(resolved['id'])
+    contextual = bool(_CONTEXT_WORDS.search(text) or re.search(r'这条投诉|该投诉|刚才.*投诉', text))
+    if not values.get('assignee_name'):
+        shown = dict(result)
+        shown['arguments'] = values
+        return shown
+    if not values.get('complaint_id') and not contextual:
+        shown = dict(result)
+        shown['arguments'] = values
+        return shown
+    authorized = set(authorized_commands or ())
+    required = ('complaint.search', 'complaint_staff.search', 'complaint.assign')
+    if not all(command in authorized for command in required):
+        shown = dict(result)
+        shown['arguments'] = values
+        return shown
+    clear_pending_plan()
+    return {
+        'action': 'TOOL',
+        'intent': 'complaint.assign',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_MULTI',
+        'arguments': values,
+    }
+
+
+def _repair_inspection_create(text, result, context, authorized_commands):
+    """Only execute inspection creation when all human business facts are explicit."""
+    if result.get('intent') != 'inspection.create':
+        return result
+    values = dict(result.get('arguments') or {})
+    assignee = re.search(
+        r'(?:交给|分给|安排给|由|让)\s*([\u4e00-\u9fff]{2,8}?)(?=负责|处理|巡检|检查|，|,|。|；|;|\s|$)',
+        text,
+    )
+    if assignee:
+        values['assignee_name'] = assignee.group(1).strip()
+    elif values.get('repairer_name'):
+        values['assignee_name'] = values['repairer_name']
+    due_at = visitor_expected_at(text)
+    if due_at:
+        values['due_at'] = due_at
+    checklist = re.search(
+        r'(?:检查|巡检)(?:内容|项目|清单)?(?:是|为|包括|：|:)?\s*([^，,。；;]{1,500})',
+        text,
+    )
+    if checklist:
+        item = checklist.group(1).strip()
+        if item and not re.search(r'^(?:任务|一下|一次)$', item):
+            values['checklist'] = item
+    resolved_device = (context or {}).get('resolved_device') or {}
+    if resolved_device.get('id') and not (values.get('device_code') or values.get('code')):
+        values['device_id'] = resolved_device['id']
+    missing = []
+    if not (values.get('device_id') or values.get('device_code') or values.get('code')):
+        missing.append('device')
+    if not values.get('assignee_name'):
+        missing.append('assignee')
+    if not values.get('due_at'):
+        missing.append('due_at')
+    if not values.get('checklist'):
+        missing.append('checklist')
+    required = ('device.search', 'inspection_staff.search', 'inspection.create')
+    authorized = set(authorized_commands or ())
+    candidates = [command for command in required if command in authorized]
+    if missing:
+        return {
+            'action': 'CLARIFY',
+            'intent': 'inspection.create',
+            'candidates': candidates,
+            'missing_fields': missing,
+            'entity_status': 'MISSING',
+            'arguments': values,
+        }
+    if not all(command in authorized for command in required):
+        return result
+    clear_pending_plan()
+    return {
+        'action': 'TOOL',
+        'intent': 'inspection.create',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_MULTI',
+        'arguments': values,
+    }
+
+
+def _repair_parking_assign(result, authorized_commands):
+    """Resolve parking space and vehicle by user-visible business identifiers."""
+    if result.get('intent') != 'parking.assign':
+        return result
+    values = dict(result.get('arguments') or {})
+    if values.get('space_code'):
+        values['space_code'] = str(values['space_code']).strip().upper()
+    if values.get('plate'):
+        values['plate'] = str(values['plate']).strip().upper().replace(' ', '')
+    missing = []
+    if not values.get('space_code'):
+        missing.append('space')
+    if not values.get('plate'):
+        missing.append('vehicle')
+    required = ('parking.search', 'vehicle.search', 'parking.assign')
+    authorized = set(authorized_commands or ())
+    candidates = [command for command in required if command in authorized]
+    if missing:
+        return {
+            'action': 'CLARIFY',
+            'intent': 'parking.assign',
+            'candidates': candidates,
+            'missing_fields': missing,
+            'entity_status': 'MISSING',
+            'arguments': values,
+        }
+    if not all(command in authorized for command in required):
+        return result
+    clear_pending_plan()
+    return {
+        'action': 'TOOL',
+        'intent': 'parking.assign',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_MULTI',
+        'arguments': values,
+    }
+
+
+def _repair_parking_release(text, result, authorized_commands):
+    """Resolve the active ParkingUse row before proposing a release."""
+    if result.get('intent') != 'parking.release':
+        return result
+    values = dict(result.get('arguments') or {})
+    for internal_key in ('id', 'version', 'parking_use_id'):
+        values.pop(internal_key, None)
+    if values.get('space_code'):
+        values['space_code'] = str(values['space_code']).strip().upper()
+    if values.get('plate'):
+        values['plate'] = str(values['plate']).strip().upper().replace(' ', '')
+    reason = re.search(r'(?:原因|理由|因为)(?:是|为|：|:)?\s*([^，,。；;]{1,300})', text)
+    if reason:
+        values['reason'] = reason.group(1).strip()
+    values['status'] = 'active'
+    missing = []
+    if not (values.get('space_code') or values.get('plate')):
+        missing.append('parking_use')
+    if not values.get('reason'):
+        missing.append('reason')
+    required = ('parking_use.search', 'parking.release')
+    authorized = set(authorized_commands or ())
+    candidates = [command for command in required if command in authorized]
+    if missing:
+        return {
+            'action': 'CLARIFY',
+            'intent': 'parking.release',
+            'candidates': candidates,
+            'missing_fields': missing,
+            'entity_status': 'MISSING',
+            'arguments': values,
+        }
+    if not all(command in authorized for command in required):
+        return result
+    clear_pending_plan()
+    return {
+        'action': 'CONFIRM',
+        'intent': 'parking.release',
+        'candidates': list(required),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_FIRST',
+        'arguments': values,
+    }
+
+
+def _smooth_context_resolution(text, result, authorized_commands):
+    if result.get('action') != 'CLARIFY':
+        return result
+    intent = result.get('intent')
+    resolvers = _CONTEXT_RESOLVERS.get(intent)
+    if not resolvers or not _CONTEXT_WORDS.search(text):
+        return result
+    authorized = set(authorized_commands or ())
+    resolver_candidates = [command for command in resolvers if command in authorized]
+    if not resolver_candidates or intent not in authorized:
+        return result
+    candidates = resolver_candidates + [intent]
+    arguments = dict(result.get('arguments') or {})
+    if intent == 'visitor.checkin':
+        arguments.setdefault('status', 'registered')
+    elif intent == 'visitor.checkout':
+        arguments.setdefault('status', 'inside')
+    elif intent == 'visitor.cancel':
+        arguments.setdefault('status', 'registered')
+    elif intent == 'inspection.complete':
+        arguments.setdefault('status', 'pending')
+    elif intent == 'complaint.resolve':
+        arguments.setdefault('status', 'open')
+    elif intent == 'complaint.close':
+        arguments.setdefault('status', 'resolved')
+    elif intent == 'device.archive' and '报废' in text:
+        arguments.setdefault('status', 'retired')
+    if intent == 'payment.reverse' and re.search(r'上一笔|最近一笔', text):
+        arguments['_resolve_strategy'] = 'latest'
+    action = 'CONFIRM' if intent in CONFIRM_INTENTS else 'TOOL'
+    clear_pending_plan()
+    return {
+        'action': action,
+        'intent': intent,
+        'candidates': list(dict.fromkeys(candidates)),
+        'missing_fields': [],
+        'entity_status': 'RESOLVE_FIRST',
+        'arguments': arguments,
+    }
+
+
+def _repair_exact_community_followup(text, result, context, authorized_commands):
+    if result.get('action') != 'CLARIFY' or result.get('intent') not in {'notice.save', 'notice.batch_publish'}:
+        return result
+    missing = list(result.get('missing_fields') or [])
+    if 'community_id' not in missing:
+        return result
+    writable = (context or {}).get('writable_communities')
+    if not isinstance(writable, list):
+        return result
+    answer = str(text or '').strip()
+    matches = [row for row in writable if isinstance(row, dict) and str(row.get('name') or '').strip() == answer]
+    if len(matches) != 1 or not matches[0].get('id'):
+        return result
+    arguments = dict(result.get('arguments') or {})
+    arguments['community_name'] = matches[0]['name']
+    arguments['community_id'] = matches[0]['id']
+    remaining = [slot for slot in missing if slot != 'community_id']
+    if remaining:
+        repaired = dict(result)
+        repaired['missing_fields'] = remaining
+        repaired['arguments'] = arguments
+        return repaired
+    intent = result.get('intent')
+    clear_pending_plan()
+    return {
+        'action': 'CONFIRM' if intent in CONFIRM_INTENTS else 'TOOL',
+        'intent': intent,
+        'candidates': _candidates(intent, set(authorized_commands or ())),
+        'missing_fields': [],
+        'entity_status': 'RESOLVED',
+        'arguments': arguments,
+    }
+
+
+def _repair_visitor_create(text, result, context, authorized_commands):
+    """Separate human business facts from internal visitor-create identifiers.
+
+    The user supplies names/address/contact/time. Person and house database IDs
+    are resolved later through scoped read tools, never requested from the user.
+    """
+    if result.get('intent') != 'visitor.create':
+        return result
+    values = dict(result.get('arguments') or {})
+    expected = visitor_expected_at(text)
+    if expected:
+        values['expected_at'] = expected
+    if not values.get('purpose'):
+        purpose = visitor_purpose(text, values.get('person_name'))
+        if purpose:
+            values['purpose'] = purpose
+    resolved_person = (context or {}).get('resolved_person') or {}
+    resolved_house = (context or {}).get('resolved_house') or {}
+    if resolved_person.get('id') and not values.get('person_name'):
+        values['host_person_id'] = resolved_person['id']
+    if resolved_house.get('id') and not (values.get('building_name') and values.get('room_no') is not None):
+        values['house_id'] = resolved_house['id']
+    missing = []
+    if not values.get('visitor_name'):
+        missing.append('visitor')
+    if not (values.get('person_name') or values.get('host_person_id')):
+        missing.append('host_person')
+    if not (values.get('house_id') or (values.get('building_name') and values.get('room_no') is not None)):
+        missing.append('house')
+    if not values.get('phone'):
+        missing.append('phone')
+    if not values.get('expected_at'):
+        missing.append('expected_at')
+    if not values.get('purpose'):
+        missing.append('purpose')
+    candidates = _candidates('visitor.create', set(authorized_commands or ()))
+    if (context or {}).get('person_candidates', 0) > 1 and values.get('person_name'):
+        return {
+            'action': 'DISAMBIGUATE', 'intent': 'visitor.create', 'candidates': candidates,
+            'missing_fields': ['host_person'], 'entity_status': 'AMBIGUOUS', 'arguments': values,
+        }
+    if missing:
+        return {
+            'action': 'CLARIFY', 'intent': 'visitor.create', 'candidates': candidates,
+            'missing_fields': missing, 'entity_status': 'MISSING', 'arguments': values,
+        }
+    return {
+        'action': 'TOOL', 'intent': 'visitor.create', 'candidates': candidates,
+        'missing_fields': [], 'entity_status': 'RESOLVE_MULTI', 'arguments': values,
+    }
+
+
+def _clarification_text(result):
+    action = result.get('action')
+    intent = result.get('intent') or ''
+    missing = list(result.get('missing_fields') or [])
+    if action == 'DISAMBIGUATE':
+        if intent == 'visitor.create' and 'host_person' in missing:
+            return '我找到了多位同名住户。请补充住户的联系电话或更具体的房屋信息，我再继续登记访客。'
+        if intent.startswith('person.') or 'person' in missing:
+            return '我找到了多位可能的人员。请补一个能区分的信息，例如联系电话。'
+        if intent.startswith('order.'):
+            return '我找到了多张可能的工单。请告诉我工单号，或补充房号/报修内容来确认是哪一张。'
+        if intent == 'complaint.assign' and 'assignee' in missing:
+            return '要把这条投诉交给哪位工作人员处理？直接说姓名即可；同名时我再请你补充区分信息。'
+        return '我找到了多个匹配对象。请补充一个能区分它们的信息，例如姓名、联系电话、业务编号或房号。'
+    slot = missing[0] if missing else None
+    if slot == 'community_id':
+        return '这项操作要在哪个小区办理？直接告诉我小区名称即可。'
+    if slot == 'building':
+        return '具体是哪一栋？直接说“3栋”或“A栋”即可。'
+    if slot in {'house', 'unit'}:
+        return '具体是哪套房？请告诉我楼栋和房号；如果同栋有多个单元，再补充单元。'
+    if slot == 'order':
+        return '你指哪张工单？可以直接说工单号；如果就是刚才那张，也可以说“刚才那张”。'
+    if slot in {'repairer', 'assignee'}:
+        return '要交给哪位工作人员处理？直接说姓名即可；同名时我再请你补充区分信息。'
+    if slot == 'due_at':
+        return '这条巡检任务要求什么时候完成？请给出明确日期和时间，例如“明天下午两点”。'
+    if slot == 'checklist':
+        return '这次巡检具体要检查哪些项目？例如“检查振动、温度和是否漏水”。'
+    if slot == 'reason':
+        return '请补充这次操作的原因，原因会写入审计记录。'
+    if slot == 'person':
+        return '你指哪位人员？直接说姓名即可；同名时可以再补联系电话。'
+    if slot == 'host_person':
+        return '这位访客要找哪位住户？直接告诉我住户姓名即可。'
+    if slot == 'phone':
+        return '还缺访客的联系电话，请直接把手机号或联系电话发给我。' if intent == 'visitor.create' else '还缺一个联系电话，请直接把手机号或联系电话发给我。'
+    if slot == 'expected_at':
+        return '访客预计什么时候到？请带上日期范围，例如“明天下午两点”或“2026-09-09 14:00”。'
+    if slot == 'purpose':
+        return '这次来访的目的是什么？例如拜访、送货、维修或看房。'
+    if slot == 'notice_title':
+        return '这条公告的标题写什么？'
+    if slot == 'notice_content':
+        return '这条公告具体要通知什么内容？'
+    if slot == 'notice':
+        return '你要操作哪条公告？可以说公告标题，或说“刚才那条”。'
+    if slot == 'complaint':
+        return '你指哪条投诉？可以直接说投诉编号，例如“投诉#12”；如果就是刚才那条，也可以这样说。'
+    if slot == 'visitor':
+        return '访客叫什么名字？' if intent == 'visitor.create' else '你指哪位访客？可以说访客姓名，或说“刚才登记的那位”。'
+    if slot == 'vehicle':
+        return '你指哪辆车？直接告诉我车牌号即可。'
+    if slot in {'space', 'parking_use'}:
+        return '你指哪个有效车位使用关系？请直接说车位编号或车牌号。'
+    if slot == 'device':
+        return '你指哪台设备？直接告诉我设备编号或名称即可。'
+    if slot == 'inspection':
+        return '你指哪条巡检任务？可以说设备编号或巡检任务编号。'
+    if slot == 'payment':
+        return '要处理哪笔收款？可以说“上一笔”，也可以告诉我对应账单或收款记录。'
+    if slot == 'bill':
+        return '你指哪张账单？可以告诉我账单编号、房号或账期。'
+    if slot == 'fee':
+        return '要使用哪个收费项目？直接告诉我收费项目名称即可。'
+    if slot == 'new_request_details':
+        return '这次新的报修具体是什么问题？告诉我位置和故障情况即可，我不会重复提交上一条。'
+    if slot in {'id', 'version', 'disambiguation'}:
+        return '请再说明一下你要操作的具体业务对象，例如名称、编号、房号或“刚才那条”；内部记录 ID 和版本号不用你提供。'
+    return '我还缺一项办理所需的信息。请补充你要操作的具体对象或业务条件，我会接着刚才的任务继续办理。'
+
+
+def _use_local_clarification(result):
+    if result.get('action') not in {'CLARIFY', 'DISAMBIGUATE'}:
+        return result
+    if result.get('entity_status') == 'REPEAT':
+        return result
+    shown = dict(result)
+    shown['clarification_text'] = _clarification_text(result)
+    return shown
+
+
+def _force_persisted_context_resolution(text, result, context, authorized_commands):
+    """Turn a contextual mutation into resolver-first even after a restart."""
+    intent = result.get('intent') if isinstance(result, dict) else None
+    targets = {
+        'visitor.checkin': 'resolved_visitor', 'visitor.checkout': 'resolved_visitor', 'visitor.cancel': 'resolved_visitor',
+        'vehicle.archive': 'resolved_vehicle', 'device.archive': 'resolved_device',
+        'complaint.resolve': 'resolved_complaint', 'complaint.close': 'resolved_complaint',
+        'payment.reverse': 'resolved_payment', 'bill.void': 'resolved_bill',
+        'parking.release': 'resolved_parking_use', 'inspection.complete': 'resolved_inspection',
+    }
+    key = targets.get(intent)
+    target = (context or {}).get(key) if key else None
+    if not isinstance(target, dict) or not _CONTEXT_WORDS.search(str(text or '')):
+        return result
+    values = dict(result.get('arguments') or {})
+    if key == 'resolved_visitor' and target.get('id') is not None:
+        values.update({'id': target['id'], 'visitor_id': target['id']})
+        values['status'] = {'visitor.checkin': 'registered', 'visitor.checkout': 'inside', 'visitor.cancel': 'registered'}[intent]
+        for field in ('name', 'visitor_name', 'phone'):
+            values.pop(field, None)
+    elif key == 'resolved_vehicle' and target.get('plate'):
+        values['plate'] = target['plate']
+    elif key == 'resolved_device' and (target.get('device_code') or target.get('code')):
+        values['code'] = target.get('device_code') or target.get('code')
+        values.pop('device_code', None)
+    elif key == 'resolved_complaint' and target.get('id') is not None:
+        values['id'] = target['id']
+    elif key == 'resolved_payment' and target.get('id') is not None:
+        values['id'] = target['id']
+    elif key == 'resolved_bill' and (target.get('bill_id') or target.get('id')):
+        values['bill_id'] = target.get('bill_id') or target.get('id')
+    elif key == 'resolved_parking_use':
+        for field in ('space_code', 'plate'):
+            if target.get(field):
+                values[field] = target[field]
+    elif key == 'resolved_inspection' and target.get('id') is not None:
+        values['id'] = target['id']
     else:
-        action = "TOOL"
-    return {"action": action, "intent": command, "candidates": [command], "missing_fields": [], "entity_status": "RESOLVED", "arguments": values}
+        return result
+    repaired = dict(result)
+    repaired['action'] = 'CONFIRM' if intent in CONFIRM_INTENTS else 'TOOL'
+    repaired['arguments'] = values
+    repaired['entity_status'] = 'RESOLVE_FIRST'
+    repaired['candidates'] = _candidates(intent, set(authorized_commands or ()))
+    return repaired
+
+
+def plan_request(message, authorized_commands, context=None):
+    text = str(message or '').strip()
+    context = context or {}
+    result = _state_plan_request(text, authorized_commands, context)
+
+    if result.get('intent') == 'unknown' and re.search(r'发布.*(?:维修|报修).*工单|发布.*工单', text):
+        result = _state_plan_request(re.sub(r'^发布', '创建', text, count=1), authorized_commands, context)
+
+    result = _repair_notice_content(text, result)
+    result = _repair_payment_target(text, result, authorized_commands)
+    result = _repair_device_code(result)
+    result = _repair_order_cancel(text, result, authorized_commands)
+    result = _repair_order_assign(result, context, authorized_commands)
+    result = _repair_complaint_assign(text, result, context, authorized_commands)
+    result = _repair_inspection_create(text, result, context, authorized_commands)
+    result = _repair_parking_assign(result, authorized_commands)
+    result = _repair_parking_release(text, result, authorized_commands)
+    result = _smooth_context_resolution(text, result, authorized_commands)
+    result = _force_persisted_context_resolution(text, result, context, authorized_commands)
+    result = _repair_exact_community_followup(text, result, context, authorized_commands)
+    result = _repair_visitor_create(text, result, context, authorized_commands)
+    result = _use_local_clarification(result)
+    _store_pending(result)
+    return result
+
+
+# Final safety layer: keep the mature planner behavior above intact, then make
+# financial writes stricter and persist the stricter pending plan. This avoids
+# duplicating the general state machine while ensuring finance never relies on
+# provider guesses or implicit defaults.
+_base_plan_request = plan_request
+
+def plan_request(message, authorized_commands, context=None):
+    from agent_financial_planner import repair_financial_plan
+    result = _base_plan_request(message, authorized_commands, context)
+    result = repair_financial_plan(str(message or '').strip(), result, authorized_commands)
+    _store_pending(result)
+    return result

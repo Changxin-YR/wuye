@@ -32,7 +32,7 @@ from bootstrap import seed_catalog
 from database import environment
 from management import bp as management_bp
 from property_service import audit as domain_audit,snapshot as domain_snapshot
-from business_queries import query as domain_query
+from business_queries import _building_aliases, _unit_aliases, query as domain_query
 from permissions import Policy
 from dify_client import BailianClient, DeepSeekClient, DifyClient, DifyUnavailable, OpenAICompatibleAgentClient, _PLANNER_HINT, _TOOL_COMMANDS
 from models import AiAction, AiGrant, AiConversation, AuditLog, Base, Community, Evaluation, House, Notice, Notification, OrderLog, Person, SchemaMigration, User, WorkOrder, utcnow
@@ -41,6 +41,38 @@ from services import InvalidTransition, ORDER_TYPES, ROLE_TEXT, STATUS_TEXT, can
 PROJECT_ROOT=Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT/'.env')
 AGENT_SYSTEM_PROMPT=(PROJECT_ROOT/'config'/'agent_system_prompt.md').read_text(encoding='utf-8')
+
+
+def _remember_business_selector(remembered, intent, values):
+    """Persist only user-visible selectors; never retain an optimistic version."""
+    values = dict(values or {})
+    specs = {
+        'complaint': ('resolved_complaint', ('complaint_id', 'id', 'title')),
+        'visitor': ('resolved_visitor', ('visitor_id', 'id', 'visitor_name', 'name', 'phone')),
+        'vehicle': ('resolved_vehicle', ('plate',)),
+        'parking': ('resolved_parking_space', ('space_code', 'plate')),
+        'parking_use': ('resolved_parking_use', ('space_code', 'plate')),
+        'device': ('resolved_device', ('device_code', 'code', 'name')),
+        'inspection': ('resolved_inspection', ('inspection_id', 'id', 'device_code')),
+        'payment': ('resolved_payment', ('payment_id', 'id', 'bill_id')),
+        'bill': ('resolved_bill', ('bill_id', 'id', 'period', 'month')),
+        'order': ('resolved_order', ('order_no',)),
+        'house': ('resolved_house', ('building_name', 'unit', 'room_no')),
+        'person': ('resolved_person', ('person_name', 'phone')),
+        'notice': ('resolved_notice', ('notice_id', 'id', 'title', 'community_id', 'building_id')),
+    }
+    domain = str(intent or '').split('.', 1)[0]
+    if intent == 'payment.record':
+        domain = 'bill'
+    key_spec = specs.get('parking_use' if intent == 'parking.release' else domain)
+    if not key_spec:
+        return
+    key, fields = key_spec
+    selector = {field: values.get(field) for field in fields if values.get(field) not in (None, '')}
+    if key == 'resolved_visitor' and selector.get('id') is not None:
+        selector = {'id': selector['id']}
+    if selector:
+        remembered[key] = selector
 
 
 def create_app(test_config=None):
@@ -158,7 +190,6 @@ def create_app(test_config=None):
     def http_error(exc):
         messages={401:'请先登录',403:'你没有权限执行此操作',404:'内容不存在或当前不可访问',413:'文件或请求过大'}
         shown=messages.get(exc.code,exc.description)
-        # Keep a data-scope distinction for API/Agent clients without exposing rows.
         basis=str(exc.description or shown)
         return error_response(shown,exc.code,error_code_for(exc.code,basis))
 
@@ -503,8 +534,7 @@ def create_app(test_config=None):
         if planner_hint.get('intent')=='notice.save' and (planner_hint.get('arguments') or {}).get('building_name'):
             from models import Building
             building_name=planner_hint['arguments']['building_name']
-            names=building_name_variants(building_name)
-            planner_context['notice_building_candidates']=len(list(g.db.scalars(Policy(g.db,g.user).query(Building).where(Building.name.in_(names)).limit(3))))
+            planner_context['notice_building_candidates']=len(list(g.db.scalars(Policy(g.db,g.user).query(Building).where(Building.name.in_(_building_aliases(building_name))).limit(3))))
             planner_hint=plan_request(message, authorized, planner_context)
         person_name=(planner_hint.get('arguments') or {}).get('person_name')
         if person_name:
@@ -525,9 +555,12 @@ def create_app(test_config=None):
             if not local_conversation:
                 local_conversation=AiConversation(id=str(uuid.uuid4()),user_id=g.user.id,auth_version=g.user.auth_version,scope_hash=digest)
                 g.db.add(local_conversation);g.db.flush()
-                save_state(g.db,local_conversation,g.user,planner_context)
+            planner_context['pending_plan'] = planner_hint
+            save_state(g.db,local_conversation,g.user,planner_context)
             answers={'CLARIFY':'请补充必要的业务信息后再操作。','DISAMBIGUATE':'找到多个匹配对象，请提供更多信息以确认。','DENY':'该请求不在当前登录身份允许的范围内。'}
-            return jsonify(answer=answers[planner_hint['action']],conversation_id=local_conversation.id,source='planner',scope=context['scope'],actions=[])
+            answer=planner_hint.get('clarification_text')
+            if not isinstance(answer,str) or not answer.strip():answer=answers[planner_hint['action']]
+            return jsonify(answer=answer.strip(),conversation_id=local_conversation.id,source='planner',scope=context['scope'],actions=[])
         upstream=conversation.upstream_id if conversation and conversation.scope_hash==digest else ''
         if g.db.scalar(select(func.count(AiGrant.id)).where(AiGrant.user_id==g.user.id,AiGrant.created_at>utcnow()-timedelta(minutes=1)))>=10:
             return jsonify(error='请求过于频繁，请稍后再试'),429
@@ -537,27 +570,20 @@ def create_app(test_config=None):
             return jsonify(error='agent_request_id格式无效',code='VALIDATION_ERROR'),400
         agent_request_id=supplied_request_id or uuid.uuid4().hex
         g.db.add(AiGrant(id=gid,token_hash=hashlib.sha256(token.encode()).hexdigest(),user_id=uid,auth_version=auth,expires_at=utcnow()+timedelta(minutes=3)))
-        # Publish the narrow delegated grant before an external provider callback.
-        # The database stores only the token hash and every callback rechecks IAM.
         g.db.commit()
         is_bailian=isinstance(app.extensions['dify'],OpenAICompatibleAgentClient)
         if conversation and is_bailian and hasattr(app.extensions['dify'],'hydrate_history'):
             app.extensions['dify'].hydrate_history(f'property:{uid}:v{auth}', conversation.upstream_id or conversation.id, load_messages(g.db,conversation,g.user))
         if is_bailian:
-            # Local Bailian tool callbacks are bound to this closure. The grant
-            # secret never needs to be placed in model-visible text.
             prompt=message.strip()
             system_instruction=(AGENT_SYSTEM_PROMPT+'\n当前授权摘要（仅供规划，最终权限以后端实时校验为准）：'+json.dumps(context,ensure_ascii=False)+
                                 '\n确定性规划提示（只用于缩小候选，不代表授权）：'+json.dumps(planner_hint,ensure_ascii=False)+
                                 '\n本地工具调用无需提供request_token；服务端自动绑定本轮登录身份。')
         else:
-            # Dify invokes the exported OpenAPI endpoint itself, so it receives a
-            # three-minute delegated token. Provider output is scrubbed before UI.
             prompt=(AGENT_SYSTEM_PROMPT+'\n本次request_token：'+token+'\n授权数据：'+json.dumps(context,ensure_ascii=False)+'\n用户请求：'+message.strip())
             system_instruction=''
         mutation_commands=set()
         def planner_tool_call():
-            """Build one conservative callback request for a clear planner result."""
             command=planner_hint.get('intent')
             values=dict(planner_hint.get('arguments') or {})
             repeat_create=planner_hint.get('entity_status')=='REPEAT' and command=='order.create'
@@ -576,8 +602,8 @@ def create_app(test_config=None):
                 return rows[0] if len(rows)==1 else None
             def one_house():
                 q=policy.query(House)
-                if values.get('building_name'):q=q.where(House.building_name==values['building_name'])
-                if values.get('unit'):q=q.where(House.unit==values['unit'])
+                if values.get('building_name'):q=q.where(House.building_name.in_(_building_aliases(values['building_name'])))
+                if values.get('unit'):q=q.where(House.unit.in_(_unit_aliases(values['unit'])))
                 if values.get('room_no') is not None:q=q.where(House.room_no==values['room_no'])
                 rows=list(g.db.scalars(q.limit(2)))
                 return rows[0] if len(rows)==1 else None
@@ -637,8 +663,7 @@ def create_app(test_config=None):
                     bid=None
                     if values.get('notice_scope')=='building' or values.get('building_name'):
                         building_name=values.get('building_name')
-                        names=building_name_variants(building_name)
-                        buildings=list(g.db.scalars(policy.query(Building).where(Building.community_id==cid,Building.name.in_(names)).limit(2)))
+                        buildings=list(g.db.scalars(policy.query(Building).where(Building.community_id==cid,Building.name.in_(_building_aliases(building_name))).limit(2)))
                         if len(buildings)!=1:return None
                         bid=buildings[0].id
                     params={'community_id':cid,'building_id':bid,'title':title,'content':content}
@@ -655,7 +680,7 @@ def create_app(test_config=None):
             elif command=='device.save':
                 building_name=values.get('building_name')
                 code=values.get('space_code')
-                building=g.db.scalar(policy.query(Building).where(Building.name==building_name)) if building_name else None
+                building=g.db.scalar(policy.query(Building).where(Building.name.in_(_building_aliases(building_name)))) if building_name else None
                 if not building or not code:return None
                 name='水泵' if '水泵' in message else message.split('，',1)[0][:100]
                 params={'community_id':building.community_id,'building_id':building.id,'code':code,'name':name,'category':'equipment','location':'','status':'normal'}
@@ -779,11 +804,17 @@ def create_app(test_config=None):
                 conversation.upstream_id=result['conversation_id'];conversation.scope_hash=digest;conversation.updated_at=utcnow()
                 remembered=dict(planner_context)
                 values=planner_hint.get('arguments') or {}
+                _remember_business_selector(remembered, planner_hint.get('intent'), values)
+                if planner_hint.get('action') in {'CLARIFY', 'DISAMBIGUATE'}:
+                    remembered['pending_plan'] = planner_hint
+                else:
+                    remembered.pop('pending_plan', None)
                 if values.get('person_name'):
                     rows=list(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==values['person_name']).limit(2)))
                     if len(rows)==1:remembered['resolved_person']={'id':rows[0].id,'name':rows[0].name}
                 if values.get('building_name') and values.get('room_no') is not None:
-                    q=Policy(g.db,g.user).query(House).where(House.building_name==values['building_name'],House.room_no==values['room_no'])
+                    q=Policy(g.db,g.user).query(House).where(House.building_name.in_(_building_aliases(values['building_name'])),House.room_no==values['room_no'])
+                    if values.get('unit'):q=q.where(House.unit.in_(_unit_aliases(values['unit'])))
                     rows=list(g.db.scalars(q.limit(2)))
                     if len(rows)==1:remembered['resolved_house']={'id':rows[0].id,'building_name':rows[0].building_name,'room_no':rows[0].room_no}
                 if planner_hint.get('intent','').startswith('order.'):
@@ -814,7 +845,6 @@ def create_app(test_config=None):
                 else:result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream)
             except DifyUnavailable as exc:failure=exc
         finally:ai_slots.release()
-        # End the old read snapshot, then recheck identity/scope after the upstream wait.
         g.db.rollback();g.db.expire_all();g.user=g.db.get(User,uid)
         grant=g.db.get(AiGrant,gid)
         if grant:grant.expires_at=utcnow()
@@ -828,11 +858,17 @@ def create_app(test_config=None):
         conversation.upstream_id=result['conversation_id'];conversation.scope_hash=digest;conversation.updated_at=utcnow()
         remembered=dict(planner_context)
         values=planner_hint.get('arguments') or {}
+        _remember_business_selector(remembered, planner_hint.get('intent'), values)
+        if planner_hint.get('action') in {'CLARIFY', 'DISAMBIGUATE'}:
+            remembered['pending_plan'] = planner_hint
+        else:
+            remembered.pop('pending_plan', None)
         if values.get('person_name'):
             rows=list(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==values['person_name']).limit(2)))
             if len(rows)==1:remembered['resolved_person']={'id':rows[0].id,'name':rows[0].name}
         if values.get('building_name') and values.get('room_no') is not None:
-            q=Policy(g.db,g.user).query(House).where(House.building_name==values['building_name'],House.room_no==values['room_no'])
+            q=Policy(g.db,g.user).query(House).where(House.building_name.in_(_building_aliases(values['building_name'])),House.room_no==values['room_no'])
+            if values.get('unit'):q=q.where(House.unit.in_(_unit_aliases(values['unit'])))
             rows=list(g.db.scalars(q.limit(2)))
             if len(rows)==1:remembered['resolved_house']={'id':rows[0].id,'building_name':rows[0].building_name,'room_no':rows[0].room_no}
         if planner_hint.get('intent','').startswith('order.'):

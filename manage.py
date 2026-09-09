@@ -1,5 +1,6 @@
 """Deployment CLI. Never prints secrets or overwrites existing admin credentials."""
 import argparse
+from datetime import timedelta
 from getpass import getpass
 import json
 import os
@@ -7,12 +8,12 @@ from pathlib import Path
 import re
 import sys
 from dotenv import load_dotenv
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 from werkzeug.security import generate_password_hash
 from database import initialize, make_engine, missing_schema, upgrade
 from dify_client import DifyUnavailable, client_from_env
-from models import User
+from models import AiAction, AiConversation, AiGrant, BusinessRequest, ConversationMessage, ConversationState, User, utcnow
 
 load_dotenv(Path(__file__).resolve().parent/'.env')
 
@@ -22,6 +23,7 @@ def main():
     sub.add_parser('init-db');sub.add_parser('upgrade-db')
     admin=sub.add_parser('create-admin');admin.add_argument('--username',required=True)
     diag=sub.add_parser('diagnose');diag.add_argument('--ai',action='store_true');diag.add_argument('--infer',action='store_true')
+    cleanup=sub.add_parser('cleanup-agent-state');cleanup.add_argument('--dry-run',action='store_true');cleanup.add_argument('--conversation-days',type=int,default=90);cleanup.add_argument('--request-days',type=int,default=30)
     args=parser.parse_args()
     try:
         url=os.getenv('DATABASE_URL','')
@@ -40,6 +42,28 @@ def main():
                 if db.scalar(select(User).where(User.username==args.username)):raise ValueError('用户名已存在，不覆盖账号')
                 db.add(User(username=args.username,password_hash=generate_password_hash(pw),role=0,real_name='物业管理员',active=True));db.commit()
             print('管理员已创建')
+        elif args.command=='cleanup-agent-state':
+            now=utcnow()
+            grant_cutoff=now-timedelta(days=7)
+            conversation_cutoff=now-timedelta(days=max(1,args.conversation_days))
+            request_cutoff=now-timedelta(days=max(1,args.request_days))
+            with Session(engine) as db:
+                counts={
+                    'actions': db.scalar(select(func.count()).select_from(AiAction).where(AiAction.expires_at < now)),
+                    'grants': db.scalar(select(func.count()).select_from(AiGrant).where(AiGrant.created_at < grant_cutoff)),
+                    'conversations': db.scalar(select(func.count()).select_from(AiConversation).where(AiConversation.updated_at < conversation_cutoff)),
+                    'business_requests': db.scalar(select(func.count()).select_from(BusinessRequest).where(BusinessRequest.created_at < request_cutoff)),
+                }
+                if not args.dry_run:
+                    db.execute(delete(AiAction).where(AiAction.expires_at < now))
+                    db.execute(delete(AiGrant).where(AiGrant.created_at < grant_cutoff))
+                    old_ids=select(AiConversation.id).where(AiConversation.updated_at < conversation_cutoff)
+                    db.execute(delete(ConversationMessage).where(ConversationMessage.conversation_id.in_(old_ids)))
+                    db.execute(delete(ConversationState).where(ConversationState.conversation_id.in_(old_ids)))
+                    db.execute(delete(AiConversation).where(AiConversation.id.in_(old_ids)))
+                    db.execute(delete(BusinessRequest).where(BusinessRequest.created_at < request_cutoff))
+                    db.commit()
+            print(json.dumps({'dry_run':args.dry_run,'deleted':counts},ensure_ascii=False))
         else:
             missing=missing_schema(engine);result={'database':'ok','schema':'ok' if not missing else 'upgrade_required','missing':missing}
             if args.ai or args.infer:

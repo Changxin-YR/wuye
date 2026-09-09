@@ -32,7 +32,11 @@ class AgentPersistenceTests(unittest.TestCase):
         with self.db() as db:
             user = db.get(User, 1)
             conversation = db.get(AiConversation, 'conversation-1')
-            save_state(db, conversation, user, {'resolved_order': {'id': 7, 'order_no': 'WO-7', 'version': 9}, 'secret': 'discard'}, [{'role': 'user', 'content': '查工单'}, {'role': 'assistant', 'content': '已找到'}])
+            save_state(db, conversation, user, {
+                'resolved_order': {'id': 7, 'order_no': 'WO-7', 'version': 9},
+                'pending_plan': {'action': 'CLARIFY', 'intent': 'visitor.create', 'missing_fields': ['phone'], 'arguments': {'house_id': 9, 'version': 2, 'purpose': '拜访'}},
+                'secret': 'discard',
+            }, [{'role': 'user', 'content': '查工单'}, {'role': 'assistant', 'content': '已找到'}])
             db.commit()
         with self.db() as db:
             user = db.get(User, 1)
@@ -41,6 +45,8 @@ class AgentPersistenceTests(unittest.TestCase):
             self.assertEqual(state['resolved_order'], {'id': 7, 'order_no': 'WO-7'})
             self.assertNotIn('secret', state)
             self.assertNotIn('version', json.dumps(state))
+            self.assertEqual(state['pending_plan']['intent'], 'visitor.create')
+            self.assertNotIn('house_id', state['pending_plan']['arguments'])
             self.assertEqual(load_messages(db, conversation, user)[-1]['content'], '已找到')
             self.assertEqual(db.scalar(select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.sequence.desc())).content, '已找到')
 

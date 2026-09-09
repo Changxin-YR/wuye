@@ -10,6 +10,18 @@ SELECTOR_KEYS = {
     'resolved_order', 'resolved_house', 'resolved_person', 'resolved_notice',
     'resident_current_house', 'writable_communities', 'person_candidates',
     'vehicle_candidates', 'parking_candidates', 'notice_building_candidates',
+    'resolved_complaint', 'resolved_visitor', 'resolved_vehicle',
+    'resolved_parking_space', 'resolved_parking_use', 'resolved_device',
+    'resolved_inspection', 'resolved_payment', 'resolved_bill', 'resolved_fee',
+    'pending_plan',
+}
+
+_SELECTOR_FIELDS = {
+    'id', 'name', 'order_no', 'building_name', 'room_no', 'title',
+    'community_id', 'building_id', 'plate', 'device_code', 'code',
+    'visitor_name', 'complaint_id', 'bill_id', 'payment_id', 'space_code',
+    'period', 'month', 'unit', 'person_name', 'phone', 'purpose',
+    'expected_at',
 }
 
 
@@ -28,13 +40,31 @@ def selector_state(value):
     result = {}
     for key in SELECTOR_KEYS:
         item = value.get(key)
+        if key == 'pending_plan':
+            if not isinstance(item, dict):
+                continue
+            pending = {field: item.get(field) for field in ('action', 'intent', 'entity_status') if item.get(field) not in (None, '')}
+            for field in ('candidates', 'missing_fields'):
+                values = item.get(field)
+                if isinstance(values, list):
+                    pending[field] = [str(entry)[:80] for entry in values[:20] if isinstance(entry, (str, int))]
+            arguments = item.get('arguments')
+            if isinstance(arguments, dict):
+                pending['arguments'] = {
+                    field: value for field, value in arguments.items()
+                    if value not in (None, '') and field != 'version' and not field.endswith('_id') and field not in {'id', 'parking_use_id'}
+                    and isinstance(value, (str, int, float, bool))
+                }
+            if pending.get('intent'):
+                result['pending_plan'] = pending
+            continue
         if key == 'resident_current_house' or key.endswith('_candidates'):
             if isinstance(item, (bool, int)):
                 result[key] = item
         elif isinstance(item, list):
             result[key] = [x for x in item[:101] if isinstance(x, dict)]
         elif isinstance(item, dict):
-            clean = {k: v for k, v in item.items() if k in {'id', 'name', 'order_no', 'building_name', 'room_no', 'title', 'community_id', 'building_id'} and isinstance(v, (str, int, type(None)))}
+            clean = {k: v for k, v in item.items() if k in _SELECTOR_FIELDS and isinstance(v, (str, int, type(None)))}
             clean.pop('version', None)
             if clean:
                 result[key] = clean
