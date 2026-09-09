@@ -2,6 +2,7 @@
 import re
 
 from flask import abort
+from sqlalchemy import select
 
 from property_service_core import *
 from property_service_core import PropertyService as _CorePropertyService
@@ -28,3 +29,16 @@ class PropertyService(_CorePropertyService):
         ):
             abort(400, description='请选择1—100个有效小区')
         return list(dict.fromkeys(map(int, value)))
+
+    def do_lease(self, action):
+        obj, message = super().do_lease(action)
+        if action == 'checkout' and obj is not None:
+            relations = self.db.scalars(
+                select(HousePerson).where(
+                    HousePerson.lease_id == obj.id,
+                    HousePerson.kind == 'tenant',
+                )
+            )
+            for relation in relations:
+                relation.is_resident = False
+        return obj, message
