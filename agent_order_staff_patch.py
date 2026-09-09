@@ -13,6 +13,8 @@ except Exception:  # pragma: no cover
     def has_request_context():
         return False
 
+from agent_planner_core import _detect_intent
+
 
 _LOCKED_FACTS_KEY = '_staff_disambiguation_locked_facts'
 _STAFF_DOMAINS = {
@@ -155,6 +157,33 @@ def _install_staff_phone_resolver_patch():
     dify_client._order_staff_phone_resolver_patch_installed = True
 
 
+def _install_staff_pending_intent_boundary_patch():
+    """An explicit different business intent must replace staff disambiguation.
+
+    Generic disambiguation accepts digits/device codes as possible follow-up
+    clues. That is useful for ambiguous entities but unsafe for runtime staff
+    pending state: a new request such as ``给P-01安排巡检`` must not be consumed
+    as a clue for an older complaint assignment merely because it contains
+    ``P-01``. Only staff-runtime pending receives this stricter boundary.
+    """
+    import agent_planner_state as state
+
+    if getattr(state, '_staff_pending_intent_boundary_patch_installed', False):
+        return
+    original = state._looks_like_continuation
+
+    def staff_safe_continuation(text, pending):
+        pending_intent = getattr(pending, 'intent', None)
+        if pending_intent in _STAFF_DOMAINS:
+            detected = _detect_intent(str(text or '').strip())
+            if detected and detected != pending_intent:
+                return False
+        return original(text, pending)
+
+    state._looks_like_continuation = staff_safe_continuation
+    state._staff_pending_intent_boundary_patch_installed = True
+
+
 def repair_order_staff_disambiguation_plan(text, result, authorized_commands):
     """Install runtime guards for authorized staff-resolved workflows.
 
@@ -173,4 +202,5 @@ def repair_order_staff_disambiguation_plan(text, result, authorized_commands):
     ):
         _install_runtime_pending_patch()
         _install_staff_phone_resolver_patch()
+        _install_staff_pending_intent_boundary_patch()
     return result
