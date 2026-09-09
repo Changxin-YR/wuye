@@ -122,7 +122,12 @@ def _read_result(intent, authorized, values):
 def repair_resident_directory_plan(text, result, authorized_commands):
     """Keep broad resident identity reads behind person.read, never property.read."""
     value = str(text or '').strip()
-    if not re.search(r'住户(?:信息|名单|列表|名册)|(?:查询|查|看看|看下|查一下|查下).{0,20}住户', value):
+    # Billing phrases may contain the word “住户” but are not requests for a
+    # resident identity directory. Never let this privacy repair steal a billing
+    # intent such as “查询B栋住户账单”.
+    if re.search(r'账单|欠费|物业费|收费|费用|缴费|交费|未缴|未交|收款|付款', value):
+        return result
+    if not re.search(r'住户(?:信息|名单|列表|名册)|(?:有哪些|有什么|列出|查询|查|看看|看下|查一下|查下).{0,20}住户(?:信息|名单|列表|名册)', value):
         return result
     values = dict(result.get('arguments') or {})
     # A concrete room query is intentionally handled by the privacy-preserving
