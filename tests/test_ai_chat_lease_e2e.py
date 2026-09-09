@@ -73,10 +73,13 @@ class AiChatLeaseEndToEndTests(unittest.TestCase):
         self.assertEqual(response.status_code, expected, response.text[:1800])
         return response.json
 
-    def chat(self, message):
+    def chat(self, message, conversation_id=None):
+        payload = {'message': message}
+        if conversation_id:
+            payload['conversation_id'] = conversation_id
         return self.client.post(
             '/ai/chat',
-            json={'message': message},
+            json=payload,
             headers={'X-CSRF-Token': self.csrf()},
         )
 
@@ -169,6 +172,64 @@ class AiChatLeaseEndToEndTests(unittest.TestCase):
                 HousePerson.kind == 'tenant',
             )), 0)
 
+            audit_row = db.scalar(select(AuditLog).where(
+                AuditLog.source == 'agent',
+                AuditLog.action == 'lease.create',
+                AuditLog.status == 'success',
+            ).order_by(AuditLog.id.desc()))
+            self.assertIsNotNone(audit_row)
+
+    def test_two_turn_chat_clarifies_locally_then_resumes_same_lease_and_executes(self):
+        house_id = self.make_house(1, 'A栋', 102)
+        tenant_id = self.make_person(1, '李四', '13800000223')
+        provider = BailianClient('http://agent.invalid', 'fixture-key', 'qwen-plus')
+        self.app.extensions['dify'] = provider
+
+        with patch.object(provider, '_request', side_effect=AssertionError('clarification must stay local')):
+            first = self.chat('给李四登记租户入住，A栋102室')
+        self.assertEqual(first.status_code, 200, first.text[:1800])
+        self.assertEqual(first.json.get('source'), 'planner', first.text[:1800])
+        self.assertEqual(first.json.get('actions'), [])
+        self.assertIn('租期', first.json.get('answer', ''))
+        conversation_id = first.json.get('conversation_id')
+        self.assertTrue(conversation_id)
+        with self.factory() as db:
+            self.assertEqual(db.scalar(select(func.count(Lease.id)).where(Lease.house_id == house_id)), 0)
+            self.assertEqual(db.scalar(select(func.count(HousePerson.id)).where(
+                HousePerson.house_id == house_id,
+                HousePerson.person_id == tenant_id,
+                HousePerson.kind == 'tenant',
+            )), 0)
+
+        start, end, move_in = lease_dates()
+        responses = iter([
+            {'id': 'lease-follow-1', 'choices': [{'message': {'content': '我先核对房屋。'}}]},
+            {'id': 'lease-follow-2', 'choices': [{'message': {'content': '我再核对租户。'}}]},
+            {'id': 'lease-follow-3', 'choices': [{'message': {'content': '开始办理入住。'}}]},
+            {'id': 'lease-follow-4', 'choices': [{'message': {'content': '租户入住已登记。'}}]},
+        ])
+        followup = f'租期{start}到{end}，实际入住时间{move_in}'
+        with patch.object(provider, '_request', side_effect=lambda *args, **kwargs: next(responses)):
+            second = self.chat(followup, conversation_id)
+
+        self.assertEqual(second.status_code, 200, second.text[:1800])
+        self.assertNotEqual(second.json.get('source'), 'planner', second.text[:1800])
+        self.assertEqual(second.json.get('conversation_id'), conversation_id)
+        with self.factory() as db:
+            lease = db.scalar(select(Lease).where(Lease.house_id == house_id))
+            self.assertIsNotNone(lease)
+            self.assertEqual(lease.status, 'active')
+            self.assertEqual(lease.start_date.isoformat(), start)
+            self.assertEqual(lease.end_date.isoformat(), end)
+            self.assertEqual(db.get(House, house_id).occupancy, 'rented')
+            relation = db.scalar(select(HousePerson).where(
+                HousePerson.house_id == house_id,
+                HousePerson.person_id == tenant_id,
+                HousePerson.kind == 'tenant',
+                HousePerson.status == 'active',
+            ))
+            self.assertIsNotNone(relation)
+            self.assertEqual(relation.lease_id, lease.id)
             audit_row = db.scalar(select(AuditLog).where(
                 AuditLog.source == 'agent',
                 AuditLog.action == 'lease.create',
