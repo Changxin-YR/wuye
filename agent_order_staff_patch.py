@@ -14,21 +14,25 @@ except Exception:  # pragma: no cover
         return False
 
 
+_LOCKED_FACTS_KEY = '_staff_disambiguation_locked_facts'
 _STAFF_DOMAINS = {
     'order.assign': {
         'resolver': 'staff.search',
         'required': ('order.search', 'staff.search', 'order.assign'),
         'drop': ('repairer_id', 'order_id', 'id', 'version'),
+        'lock': ('order_no', 'repairer_name'),
     },
     'complaint.assign': {
         'resolver': 'complaint_staff.search',
         'required': ('complaint.search', 'complaint_staff.search', 'complaint.assign'),
         'drop': ('assignee_id', 'id', 'version'),
+        'lock': ('complaint_id', 'assignee_name'),
     },
     'inspection.create': {
         'resolver': 'inspection_staff.search',
         'required': ('device.search', 'inspection_staff.search', 'inspection.create'),
         'drop': ('assignee_id', 'device_id', 'id', 'version'),
+        'lock': ('device_code', 'code', 'assignee_name', 'due_at', 'checklist'),
     },
 }
 
@@ -43,6 +47,15 @@ def _store_runtime_staff_disambiguation(hint, spec):
     values = dict((hint or {}).get('arguments') or {})
     for key in spec['drop']:
         values.pop(key, None)
+    locked = {
+        key: values[key]
+        for key in spec.get('lock', ())
+        if values.get(key) not in (None, '')
+    }
+    if locked:
+        # This is server-created state from the original operator request. It is
+        # removed again before the next planner hint reaches any provider/tool.
+        values[_LOCKED_FACTS_KEY] = locked
     _store_pending({
         'action': 'DISAMBIGUATE',
         'intent': hint.get('intent'),
@@ -51,6 +64,21 @@ def _store_runtime_staff_disambiguation(hint, spec):
         'entity_status': 'AMBIGUOUS',
         'arguments': values,
     })
+
+
+def _restore_locked_business_facts(result, spec):
+    """Let a disambiguation turn choose staff only, not mutate the original task."""
+    values = dict((result or {}).get('arguments') or {})
+    locked = values.pop(_LOCKED_FACTS_KEY, None)
+    if not isinstance(locked, dict):
+        return result
+    allowed = set(spec.get('lock', ()))
+    for key, value in locked.items():
+        if key in allowed and value not in (None, ''):
+            values[key] = value
+    repaired = dict(result)
+    repaired['arguments'] = values
+    return repaired
 
 
 def _install_runtime_pending_patch():
@@ -135,6 +163,8 @@ def repair_order_staff_disambiguation_plan(text, result, authorized_commands):
     and inspection creation with the same fail-closed semantics.
     """
     spec = _STAFF_DOMAINS.get(result.get('intent'))
+    if spec:
+        result = _restore_locked_business_facts(result, spec)
     if (
         spec
         and result.get('action') == 'TOOL'
