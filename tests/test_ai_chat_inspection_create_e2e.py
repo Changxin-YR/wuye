@@ -18,8 +18,10 @@ HASH = generate_password_hash(PW)
 
 
 def expected_due_at():
+    """DB stores Chinese local wall-clock forms as naive UTC."""
     local_today = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
-    return datetime.combine(local_today + timedelta(days=1), time(hour=14, minute=0))
+    local_due = datetime.combine(local_today + timedelta(days=1), time(hour=14, minute=0))
+    return local_due - timedelta(hours=8)
 
 
 class AiChatInspectionCreateEndToEndTests(unittest.TestCase):
