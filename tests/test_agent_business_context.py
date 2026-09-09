@@ -160,6 +160,25 @@ class BusinessTargetMemoryTests(unittest.TestCase):
         self.assertNotIn('visitor_name', second['arguments'])
         self.assertNotIn('phone', second['arguments'])
 
+    def test_real_planner_reuses_explicit_bill_for_contextual_void(self):
+        authorized = {'bill.search', 'bill.void'}
+        first = self.plan('查询账单#23', authorized)
+        self.assertEqual(first['intent'], 'bill.search')
+        self.assertEqual(first['arguments']['bill_id'], 23)
+
+        second = self.plan(
+            '把刚才这张账单作废，原因是重复出账',
+            authorized,
+            conversation_id='conv-bill-void',
+        )
+        self.assertEqual(second['intent'], 'bill.void')
+        self.assertEqual(second['action'], 'CONFIRM')
+        self.assertEqual(second['entity_status'], 'SERVER_OWNED')
+        self.assertEqual(second['arguments']['bill_id'], 23)
+        self.assertEqual(second['arguments']['reason'], '重复出账')
+        self.assertNotIn('id', second['arguments'])
+        self.assertNotIn('version', second['arguments'])
+
     def test_real_planner_reuses_vehicle_plate_without_exposing_internal_id(self):
         authorized = {'vehicle.search', 'vehicle.archive'}
         first = self.plan('查一下车牌粤A12345的车辆', authorized)
