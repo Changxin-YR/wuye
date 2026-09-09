@@ -16,6 +16,8 @@ except Exception:  # pragma: no cover - planner tests can run without Flask
     def has_request_context():
         return False
 
+from agent_order_staff_patch import repair_order_staff_disambiguation_plan
+
 
 _REQUEST_CACHE_ATTR = '_visitor_completed_plan_for_request'
 _HOST_PHONE_RE = re.compile(
@@ -179,6 +181,10 @@ def _complete_visitor_plan(values, authorized_commands):
 
 def repair_visitor_host_plan(text, result, authorized_commands):
     """Preserve visitor phone while a same-name host is disambiguated by host phone."""
+    result = repair_order_staff_disambiguation_plan(text, result, authorized_commands)
+    if result.get('intent') == 'order.assign':
+        return result
+
     _install_state_patch()
     result = _restore_completed_plan(text, result, authorized_commands)
     if result.get('intent') != 'visitor.create':
