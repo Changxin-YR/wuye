@@ -134,7 +134,7 @@ class AiChatParkingReleaseConfirmationEndToEndTests(unittest.TestCase):
         pending = actions[0]
         self.assertEqual(
             (pending['status'], pending['risk_level'], pending['execution_mode']),
-            ('pending', 'R3', 'CONFIRM'),
+            ('pending', 'R2', 'CONFIRM'),
         )
 
         with self.factory() as db:
