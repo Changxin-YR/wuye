@@ -35,6 +35,13 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("inference", result)
         self.assertIn("tool_call", result)
 
+    def test_deepseek_thinking_mode_uses_supported_auto_tool_choice(self):
+        client = DeepSeekClient("https://api.deepseek.example/v1", "deepseek-secret", "deepseek-v4-pro")
+        response = {"choices": [{"message": {"tool_calls": [{"id": "x", "function": {"name": "healthcheck_tool", "arguments": "{}"}}]}}]}
+        with patch.object(client, "_request", return_value=response) as request:
+            client._native_tool_check()
+        self.assertEqual(request.call_args.args[2]["tool_choice"], "auto")
+
 
 if __name__ == "__main__":
     unittest.main()

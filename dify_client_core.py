@@ -150,6 +150,9 @@ class BailianClient:
     def get_history(self, user, conversation_id):
         return deepcopy(self._histories.get((user, conversation_id), []))
 
+    def _tool_choice(self):
+        return "required"
+
     def _validate_url(self):
         parsed = urlsplit(self.base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
@@ -337,7 +340,7 @@ class BailianClient:
             allow_tools = bool(tool_callback and not force_final and _tools_allowed())
             if allow_tools:
                 payload["tools"] = tools
-                payload["tool_choice"] = "required"
+                payload["tool_choice"] = self._tool_choice()
             if stream:
                 completion = yield from self._stream_completion(payload)
                 message = completion.get("message") or {}
@@ -433,7 +436,7 @@ class BailianClient:
             "model": self.model,
             "messages": [{"role": "user", "content": "请调用 healthcheck_tool，并将 ok 设为 true。"}],
             "tools": tools,
-            "tool_choice": "required",
+            "tool_choice": self._tool_choice(),
             "stream": False,
         })
         choices = obj.get("choices")
@@ -472,6 +475,11 @@ class DeepSeekClient(BailianClient):
     def __init__(self, base_url, api_key, model="deepseek-v4-pro", timeout=60):
         super().__init__(base_url, api_key, model, timeout)
         self.provider = "deepseek"
+
+    def _tool_choice(self):
+        # DeepSeek V4 thinking mode rejects tool_choice=required; auto still
+        # produces native calls while the deterministic planner owns routing.
+        return "auto"
 
 
 class DifyClient:
