@@ -86,6 +86,26 @@ class PersonArchiveVehicleGuardTests(unittest.TestCase):
         })
         return house, person, relation, vehicle
 
+    def make_resident_without_vehicle(self, room_no=103):
+        building = self.business('building.save', {
+            'community_id': 1, 'name': f'V{room_no}栋', 'floors': 20,
+        })['id']
+        unit = self.business('unit.save', {
+            'building_id': building, 'name': '1单元',
+        })['id']
+        house = self.business('house.save', {
+            'unit_id': unit, 'room_no': room_no, 'area': '88',
+            'usage': 'residential', 'occupancy': 'vacant',
+        })['id']
+        person = self.business('person.save', {
+            'community_id': 1, 'name': '赵六', 'phone': '13800000126',
+        })['id']
+        relation = self.business('relation.bind', {
+            'house_id': house, 'person_id': person,
+            'kind': 'family', 'is_resident': True,
+        })
+        return house, person, relation
+
     def test_relation_end_requires_active_vehicle_to_be_archived_first(self):
         _, person, relation, vehicle = self.make_bundle()
 
@@ -116,6 +136,42 @@ class PersonArchiveVehicleGuardTests(unittest.TestCase):
         self.assertEqual(archived['id'], person)
         with self.factory() as db:
             self.assertTrue(db.get(Person, person).deleted)
+
+    def test_relation_end_requires_active_visitor_to_finish_first(self):
+        house, person, relation = self.make_resident_without_vehicle()
+        visitor = self.business('visitor.create', {
+            'house_id': house,
+            'host_person_id': person,
+            'name': '访客甲',
+            'phone': '13900000123',
+            'purpose': '拜访住户',
+            'expected_at': '2030-01-01T10:00',
+        })
+
+        blocked = self.business('relation.end', {
+            'id': relation['id'],
+            'version': relation['record']['version'],
+            'reason': '人员搬离该房屋',
+        }, expected=409)
+        self.assertIn('访客', blocked.get('error', '') + blocked.get('message', ''))
+
+        self.business('visitor.cancel', {
+            'id': visitor['id'],
+            'version': visitor['record']['version'],
+        })
+        ended = self.business('relation.end', {
+            'id': relation['id'],
+            'version': relation['record']['version'],
+            'reason': '访客记录已处理，解除房屋关系',
+        })
+        self.assertEqual(ended['id'], relation['id'])
+
+        archived = self.business('person.archive', {
+            'id': person,
+            'version': 1,
+            'reason': '访客和房屋关系均已处理，归档人员',
+        })
+        self.assertEqual(archived['id'], person)
 
     def test_person_archive_blocks_legacy_unlinked_active_vehicle(self):
         _, person, relation, vehicle = self.make_bundle(102, '粤A54321')
