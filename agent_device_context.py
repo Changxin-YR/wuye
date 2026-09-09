@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover
         return False
 
 from agent_archive_reason import repair_archive_intent_alias, repair_archive_reason_plan
-from agent_business_context import repair_business_current_plan
+from agent_complaint_context import repair_complaint_current_plan
 
 
 _TTL_SECONDS = 600
@@ -108,7 +108,7 @@ def _get_code():
 def repair_device_current_plan(text, result, authorized_commands):
     """Remember visible business targets and safely resume contextual requests."""
     result = repair_archive_intent_alias(text, result, authorized_commands)
-    result = repair_business_current_plan(text, result, authorized_commands)
+    result = repair_complaint_current_plan(text, result, authorized_commands)
     result = repair_archive_reason_plan(text, result, authorized_commands)
     values = dict(result.get('arguments') or {})
     intent = result.get('intent')
