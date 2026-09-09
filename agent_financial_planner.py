@@ -7,12 +7,12 @@ queries such as “查看收费项目” cannot be mistaken for mutations. It on
 prepares user-supplied business facts for existing scoped resolvers and
 PropertyService; it never grants permissions.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
 
 
 def _china_today():
-    return (datetime.utcnow() + timedelta(hours=8)).date()
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
 
 
 def _month_with_offset(offset=0):
@@ -104,6 +104,31 @@ def parse_unpaid_person_name(text):
     return None
 
 
+def parse_device_query_name(text):
+    """Extract an explicit natural device name without inventing an internal id/code."""
+    value = str(text or '').strip()
+    if re.search(r'(?<![A-Za-z0-9])[A-Za-z]+-\d{1,8}(?![A-Za-z0-9])', value):
+        return None
+    value = re.sub(r'^(?:查询|查一下|查下|查看|看看|看下|查)\s*', '', value)
+    value = re.sub(r'^[A-Za-z0-9一二三四五六七八九十百]+\s*(?:栋|号楼)\s*', '', value)
+    matched = re.match(r'([\u4e00-\u9fffA-Za-z0-9_-]{1,30}?)(?:设备)?(?:的)?(?:状态|情况|信息)(?:怎么样|如何)?[？?。\s]*$', value)
+    if not matched:
+        return None
+    name = matched.group(1).strip()
+    if name in {'设备', '当前', '所有', '全部'}:
+        return None
+    return name
+
+
+def _ensure_provider_device_name_lock():
+    """Make a planner-owned natural device name authoritative for provider tool calls."""
+    import dify_client
+    fields = getattr(dify_client, '_PLANNER_OWNED_READ_FIELDS', {})
+    spec = fields.get('device.search') if isinstance(fields, dict) else None
+    if isinstance(spec, dict):
+        spec.setdefault('name', ('name', 'device_name'))
+
+
 _READ_WORDS = re.compile(r'查询|查看|看看|查一下|查下|看下|详情|状态|记录|列表|有哪些|有什么|历史')
 
 
@@ -117,6 +142,23 @@ def _read_result(intent, authorized, values):
         'action': 'TOOL', 'intent': intent, 'candidates': [intent],
         'missing_fields': [], 'entity_status': 'RESOLVED', 'arguments': values,
     }
+
+
+def repair_device_read_plan(text, result):
+    """Bind a natural device-name read to the user's stated device, not all visible devices."""
+    if result.get('intent') != 'device.search' or result.get('action') == 'DENY':
+        return result
+    values = dict(result.get('arguments') or {})
+    if values.get('code') or values.get('device_code'):
+        return result
+    name = parse_device_query_name(text)
+    if not name:
+        return result
+    values['name'] = name
+    repaired = dict(result)
+    repaired['arguments'] = values
+    _ensure_provider_device_name_lock()
+    return repaired
 
 
 def repair_resident_directory_plan(text, result, authorized_commands):
@@ -258,6 +300,7 @@ def _result(intent, action, candidates, values, missing=None, status='RESOLVED')
 
 def repair_financial_plan(text, result, authorized_commands):
     """Turn financial writes into explicit-slot, server-resolved plans."""
+    result = repair_device_read_plan(text, result)
     result = repair_resident_directory_plan(text, result, authorized_commands)
     result = repair_read_plan(text, result, authorized_commands)
     authorized = set(authorized_commands or ())
