@@ -142,3 +142,8 @@ class BusinessService:
             else:notice.deleted=True
             self.audit('notice_'+action,notice.id)
         else:abort(400,description='无效公告操作')
+
+
+# Load narrow Agent safety extensions only after the shared BusinessService is defined.
+# The patch registers a scoped lease resolver and confirmation-only checkout flow.
+import agent_lease_checkout_patch  # noqa: E402,F401
