@@ -19,6 +19,7 @@ except Exception:  # pragma: no cover - planner tests can run without Flask
         return False
 
 from agent_lease_patch import is_lease_create_text, parse_lease_business_facts
+from agent_visitor_patch import repair_visitor_host_plan
 
 
 _MULTI_TENANT_RE = re.compile(
@@ -181,6 +182,10 @@ def _restore_completed_plan(text, result, authorized_commands):
 
 def repair_multi_tenant_lease_plan(text, result, authorized_commands):
     """Keep lease tenant resolution server-owned and fail closed on person lists."""
+    result = repair_visitor_host_plan(text, result, authorized_commands)
+    if result.get('intent') == 'visitor.create':
+        return result
+
     if has_multiple_tenants(text):
         authorized = set(authorized_commands or ())
         required = ('house.search', 'person.search', 'lease.create')
