@@ -8,6 +8,28 @@ import json
 import re
 
 
+_NON_CREATE_COMPLAINT_RE = re.compile(
+    r'分给|分派|派给|处理结果|已上门整改|处理完成|已经解决|已解决|'
+    r'结案|回访|统计|按楼栋|查询|查看|看看|查一下|查下|详情|状态|记录'
+)
+_COMPLAINT_CREATE_RE = re.compile(
+    r'登记投诉|发起投诉|提出投诉|我要投诉|想投诉|'
+    r'(?:栋|号楼).{0,20}\d{2,4}.{0,20}投诉|'
+    r'投诉.{0,40}(?:太吵|吵闹|噪音|异响|施工|服务|态度|卫生|垃圾|保洁|环境|异味|设施|设备|故障)'
+)
+_OTHER_COMPLAINT_INTENTS = {
+    'complaint.assign', 'complaint.resolve', 'complaint.close',
+    'complaint.stats', 'complaint.search',
+}
+
+
+def is_complaint_create_text(text):
+    value = str(text or '').strip()
+    if '投诉' not in value or _NON_CREATE_COMPLAINT_RE.search(value):
+        return False
+    return bool(_COMPLAINT_CREATE_RE.search(value))
+
+
 def _category(text):
     value = str(text or '')
     if re.search(r'噪音|太吵|吵闹|施工|异响', value):
@@ -23,7 +45,7 @@ def _category(text):
 
 def parse_complaint_business_facts(text):
     value = str(text or '').strip()
-    if '投诉' not in value:
+    if not is_complaint_create_text(value):
         return None
     facts = {}
     building = re.search(r'([A-Za-z0-9一二三四五六七八九十百]+)\s*(?:栋|号楼)', value)
@@ -117,10 +139,20 @@ def _install_provider_patch():
 
 
 def repair_complaint_create_plan(text, result, authorized_commands):
+    existing_intent = result.get('intent')
+    if existing_intent in _OTHER_COMPLAINT_INTENTS:
+        return result
+
     facts = parse_complaint_business_facts(text)
-    if result.get('intent') != 'complaint.create':
+    if existing_intent != 'complaint.create':
         if facts is None or 'complaint.create' not in set(authorized_commands or ()):
             return result
+    elif facts is None:
+        # The core planner may have more context than this narrow repair layer.
+        # Never turn a non-create complaint phrase into a create merely because
+        # it contains the word "投诉"; preserve the mature planner result.
+        return result
+
     if result.get('action') == 'DENY':
         return result
 
