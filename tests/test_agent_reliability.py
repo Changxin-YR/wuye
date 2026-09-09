@@ -39,7 +39,7 @@ class AgentPlannerTests(unittest.TestCase):
     def test_business_aliases_select_narrow_capability(self):
         cases = {
             "厨房漏水，帮我报修": ("order.create", "CLARIFY"),
-            "王五已经搬走了": ("lease.checkout", "TOOL"),
+            "王五已经搬走了": ("lease.checkout", "CLARIFY"),
             "给粤A12345安排停车位": ("parking.assign", "CLARIFY"),
             "提交巡检发现故障": ("inspection.complete", "TOOL"),
             "还是漏水，请求返修": ("order.reopen", "TOOL"),
