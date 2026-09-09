@@ -156,6 +156,9 @@ class BusinessTargetMemoryTests(unittest.TestCase):
         self.assertEqual(second['arguments']['status'], 'registered')
         self.assertEqual(second['candidates'], ['visitor.search', 'visitor.checkin'])
         self.assertNotIn('version', second['arguments'])
+        self.assertNotIn('name', second['arguments'])
+        self.assertNotIn('visitor_name', second['arguments'])
+        self.assertNotIn('phone', second['arguments'])
 
     def test_real_planner_reuses_vehicle_plate_without_exposing_internal_id(self):
         authorized = {'vehicle.search', 'vehicle.archive'}
