@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - planner tests can run without Flask
     def has_request_context():
         return False
 
+from agent_device_context import repair_device_current_plan
 from agent_lease_patch import is_lease_create_text, parse_lease_business_facts
 from agent_visitor_patch import repair_visitor_host_plan
 
@@ -182,6 +183,7 @@ def _restore_completed_plan(text, result, authorized_commands):
 
 def repair_multi_tenant_lease_plan(text, result, authorized_commands):
     """Keep lease tenant resolution server-owned and fail closed on person lists."""
+    result = repair_device_current_plan(text, result, authorized_commands)
     result = repair_visitor_host_plan(text, result, authorized_commands)
     if result.get('intent') == 'visitor.create':
         return result
@@ -200,9 +202,6 @@ def repair_multi_tenant_lease_plan(text, result, authorized_commands):
                 'arguments': {},
             }
 
-        # Rebuild only from explicit visible lease facts. Any name/phone that the
-        # single-person parser happened to pick from the list is intentionally
-        # discarded; IDs and versions are never accepted here either.
         values = dict(parse_lease_business_facts(text, require_intent=False) or {})
         for key in ('person_name', 'phone', 'person_id', 'person_ids', 'house_id', 'id', 'version'):
             values.pop(key, None)
