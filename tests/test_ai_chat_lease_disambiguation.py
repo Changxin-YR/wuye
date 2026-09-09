@@ -125,15 +125,22 @@ class AiChatLeaseDisambiguationTests(unittest.TestCase):
             {'id': 'lease-dis-2', 'choices': [{'message': {'content': '我再核对同小区租户。'}}]},
             {'id': 'lease-dis-3', 'choices': [{'message': {'content': '找到多个同名租户，请补充联系电话。'}}]},
         ])
-        with patch.object(provider, '_request', side_effect=lambda *args, **kwargs: next(first_responses)):
+        first_calls = []
+
+        def first_request(*args, **kwargs):
+            first_calls.append((args, kwargs))
+            return next(first_responses)
+
+        with patch.object(provider, '_request', side_effect=first_request):
             first = self.chat(full_request)
 
         self.assertEqual(first.status_code, 200, first.text[:1800])
         self.assertNotEqual(first.json.get('source'), 'planner', first.text[:1800])
         self.assertTrue(first.json['conversation_id'])
         self.assertEqual(first.json['actions'], [])
-        self.assertTrue('多个' in first.json['answer'] or '同名' in first.json['answer'])
-        self.assertIn('联系电话', first.json['answer'])
+        # Two read-resolver rounds plus one final answer prove ambiguity stopped
+        # before a third resolver/write round; wording is provider presentation.
+        self.assertEqual(len(first_calls), 3)
 
         with self.factory() as db:
             self.assertEqual(db.scalar(select(func.count(Lease.id)).where(Lease.house_id == house_id)), 0)
