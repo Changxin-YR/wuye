@@ -30,6 +30,7 @@ _CONTEXT_RE = re.compile(
     r'刚才|刚刚|这个|这条|这位|这辆|这台|这张|这笔|该(?:投诉|访客|车辆|车位|租约|账单|收款|工单|设备|巡检)|'
     r'上一(?:条|张|笔|个)|刚登记|刚创建|刚办理|刚查(?:到|的)?'
 )
+_VISITOR_STATE_WRITES = {'visitor.checkin', 'visitor.checkout', 'visitor.cancel'}
 
 
 def _identity_key():
@@ -213,6 +214,29 @@ def _merge_cached(domain, values):
     return merged, changed
 
 
+def _lock_contextual_visitor_id(intent, values):
+    """Keep a remembered explicit visitor number authoritative for state writes.
+
+    Generic language parsing may mistake action words such as “进入/离开” for a
+    visitor name. Once the operator has selected an explicit visitor record, those
+    redundant identity filters must not be allowed to hide the exact row. The
+    current status remains in the resolver arguments so the database state is
+    still revalidated before every mutation; id/version are never taken from the
+    model for the final write.
+    """
+    if intent not in _VISITOR_STATE_WRITES:
+        return values
+    locked = dict(values or {})
+    visitor_id = locked.get('visitor_id') or locked.get('id')
+    if not visitor_id:
+        return locked
+    locked['visitor_id'] = visitor_id
+    locked['id'] = visitor_id
+    for key in ('visitor_name', 'name', 'phone'):
+        locked.pop(key, None)
+    return locked
+
+
 def _target_satisfied(domain, values):
     values = dict(values or {})
     if domain == 'complaint':
@@ -320,6 +344,11 @@ def repair_business_current_plan(text, result, authorized_commands):
     repaired = result
     if _CONTEXT_RE.search(str(text or '')):
         merged, changed = _merge_cached(domain, result.get('arguments') or {})
+        if domain == 'visitor':
+            locked = _lock_contextual_visitor_id(intent, merged)
+            if locked != merged:
+                merged = locked
+                changed = True
         if changed:
             repaired = dict(result)
             repaired['arguments'] = merged
