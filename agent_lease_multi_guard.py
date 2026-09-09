@@ -1,10 +1,13 @@
-"""Fail closed when a single-tenant Agent lease request contains multiple people.
+"""Lease safety guards layered after the single-tenant server resolver.
 
 The backend supports multiple person_ids, but the current Agent resolver binds one
 server-resolved tenant. Until a true N-person resolver exists, a multi-person
 utterance must never be silently reduced to whichever name a regex happened to
-capture. The operator chooses one tenant, then the existing safe flow continues.
+capture. Also, a new tenant is not yet a current resident of the target building,
+so lease-specific person resolution is constrained to the resolved house's
+community rather than the resident-directory building filter.
 """
+import json
 import re
 
 from agent_lease_patch import is_lease_create_text, parse_lease_business_facts
@@ -22,8 +25,49 @@ def has_multiple_tenants(text):
     return bool(is_lease_create_text(value) and _MULTI_TENANT_RE.search(value))
 
 
+def _install_new_tenant_scope_patch():
+    """Remove only the inappropriate current-building-resident filter for leases."""
+    import dify_client
+
+    if getattr(dify_client, '_lease_new_tenant_scope_patch_installed', False):
+        return
+    original_resolver = dify_client._multi_resolver_fallback
+
+    def scoped_resolver(command, resolved=None):
+        call = original_resolver(command, resolved)
+        hint = dify_client._PLANNER_HINT.get() or {}
+        if (
+            hint.get('intent') != 'lease.create'
+            or hint.get('entity_status') != 'RESOLVE_MULTI'
+            or command != 'person.search'
+            or not isinstance(call, dict)
+        ):
+            return call
+        try:
+            params = json.loads(call.get('arguments_json') or '{}')
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return call
+        if not isinstance(params, dict):
+            return call
+        house = (resolved or {}).get('house.search') or {}
+        community_id = house.get('community_id')
+        if community_id is None:
+            return call
+        params.pop('building_id', None)
+        params['community_id'] = community_id
+        safe = dict(call)
+        safe['arguments_json'] = json.dumps(params, ensure_ascii=False)
+        return safe
+
+    dify_client._multi_resolver_fallback = scoped_resolver
+    dify_client._lease_new_tenant_scope_patch_installed = True
+
+
 def repair_multi_tenant_lease_plan(text, result, authorized_commands):
-    """Require one explicit tenant instead of guessing from a multi-person phrase."""
+    """Keep lease tenant resolution server-owned and fail closed on person lists."""
+    if result.get('intent') == 'lease.create' and result.get('entity_status') == 'RESOLVE_MULTI':
+        _install_new_tenant_scope_patch()
+
     if not has_multiple_tenants(text):
         return result
 
