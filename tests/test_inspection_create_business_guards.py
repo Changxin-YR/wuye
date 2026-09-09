@@ -105,7 +105,7 @@ class InspectionCreateBusinessGuardTests(unittest.TestCase):
             self.inspection_payload(self.local_iso(timedelta(hours=-2))),
         )
         self.assertEqual(response.status_code, 400, response.text[:1800])
-        self.assertIn('时间', response.get_data(as_text=True))
+        self.assertIn('时间', response.json.get('error', ''))
         with self.factory() as db:
             self.assertEqual(db.scalar(select(func.count(Inspection.id))), 0)
 
@@ -115,7 +115,7 @@ class InspectionCreateBusinessGuardTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200, first.text[:1800])
         second = self.business_response('inspection.create', payload)
         self.assertEqual(second.status_code, 409, second.text[:1800])
-        self.assertIn('巡检', second.get_data(as_text=True))
+        self.assertIn('巡检', second.json.get('error', ''))
         with self.factory() as db:
             rows = list(db.scalars(select(Inspection).where(
                 Inspection.device_id == self.device_id,
