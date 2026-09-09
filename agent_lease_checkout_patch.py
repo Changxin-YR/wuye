@@ -108,12 +108,10 @@ _install_lease_search_query()
 
 
 def _parse_reason(text):
+    """Accept only an operator-supplied audit reason; a move-out fact is not a reason."""
     value = str(text or '').strip()
     matched = re.search(r'(?:原因|理由|因为)(?:是|为|：|:)?\s*([^，,。；;]{1,300})', value)
-    if matched:
-        return matched.group(1).strip()
-    moved = re.search(r'(?:已经|已)?(?:搬走|搬离|退租)(?:了)?', value)
-    return moved.group(0).strip() if moved else None
+    return matched.group(1).strip() if matched else None
 
 
 def _install_provider_patch():
@@ -124,19 +122,16 @@ def _install_provider_patch():
         return
 
     dify_client._READ_ONLY_INTENTS.add('lease.search')
+    # Planner/provider resolution accepts only business-visible selectors.
+    # Internal ids remain supported by the backend query for trusted callers,
+    # but are never sourced from model/planner hints for lease checkout.
     dify_client._RESOLVER_ARGUMENTS['lease.search'] = {
-        'id', 'lease_id', 'house_id', 'status', 'person_id', 'person_name', 'phone',
-        'community_id', 'building_id', 'building_name', 'unit', 'room_no',
+        'status', 'person_name', 'phone', 'building_name', 'unit', 'room_no',
     }
     dify_client._PLANNER_OWNED_READ_FIELDS['lease.search'] = {
-        'id': ('lease_id', 'id'),
-        'house_id': ('house_id',),
         'status': ('status',),
-        'person_id': ('person_id',),
         'person_name': ('person_name',),
         'phone': ('phone',),
-        'community_id': ('community_id',),
-        'building_id': ('building_id',),
         'building_name': ('building_name',),
         'unit': ('unit',),
         'room_no': ('room_no',),
@@ -176,6 +171,8 @@ def repair_lease_checkout_plan(text, result, authorized_commands):
     reason = _parse_reason(text)
     if reason:
         values['reason'] = reason
+    else:
+        values.pop('reason', None)
     values['status'] = 'active'
 
     target_present = bool(
