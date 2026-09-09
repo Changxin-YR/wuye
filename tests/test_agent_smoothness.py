@@ -35,14 +35,14 @@ class SmoothContextPlannerTests(unittest.TestCase):
         self.assertEqual(plan['arguments']['status'], 'inside')
         self.assertIn('visitor.search', plan['candidates'])
 
-    def test_contextual_complaint_close_still_requires_confirmation(self):
+    def test_targetless_complaint_close_requires_target_before_confirmation(self):
         for text in ('这个投诉回访确认后结案', '回访住户确认后结案'):
             with self.subTest(text=text):
                 plan = plan_request(text, ALL, {})
                 self.assertEqual(plan['intent'], 'complaint.close')
-                self.assertEqual(plan['action'], 'CONFIRM')
-                self.assertEqual(plan['arguments']['status'], 'resolved')
-                self.assertEqual(plan['candidates'], ['complaint.search', 'complaint.close'])
+                self.assertEqual(plan['action'], 'CLARIFY')
+                self.assertIn('complaint', plan['missing_fields'])
+                self.assertNotEqual(plan['entity_status'], 'RESOLVE_FIRST')
 
     def test_retired_device_requires_reason_then_resolves_before_confirmation(self):
         incomplete = plan_request('归档已经报废的设备', ALL, {})
