@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=20
+    env:
+      MYSQL_TEST_SERVER_URL: mysql+pymysql://root:root@127.0.0.1:3306
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.lock.txt
+      - run: python -m compileall -q .
+      - run: python -m unittest discover -s tests -v
+      - name: WSGI import smoke
+        env:
+          SECRET_KEY: ci-secret-key-012345678901234567890123
+          DATABASE_URL: sqlite+pysqlite:///ci-smoke.db
+          APP_ENV: test
+          COOKIE_SECURE: '0'
+        run: python -c "from app import create_app; a=create_app({'TESTING': True, 'DATABASE_URL': 'sqlite+pysqlite:///:memory:', 'SECRET_KEY': 'test'}); assert a.test_client().get('/ready').status_code == 200"

@@ -88,8 +88,8 @@ class PropertyAppContractTests(unittest.TestCase):
             self.assertIn('name="csrf_token"',self.client.get(path).get_data(as_text=True))
 
     def test_static_javascript_has_executable_mime_type(self):
-        response=self.client.get('/static/js/app.js')
-        self.assertTrue(response.content_type.startswith('application/javascript'))
+        with self.client.get('/static/js/app.js') as response:
+            self.assertTrue(response.content_type.startswith('application/javascript'))
 
     def test_forwarded_prefix_is_used_for_subpath_deployment(self):
         response=self.client.get('/ai',headers={'X-Forwarded-Prefix':'/property'})
@@ -107,7 +107,8 @@ class PropertyAppContractTests(unittest.TestCase):
         self.assertIn('<meta name="app-root" content="/property">',response.get_data(as_text=True))
 
     def test_ai_frontend_prefixes_api_requests(self):
-        script=self.client.get('/static/js/app.js').get_data(as_text=True)
+        with self.client.get('/static/js/app.js') as response:
+            script=response.get_data(as_text=True)
         self.assertIn("meta[name=\"app-root\"]",script)
         self.assertIn("path('/ai/chat')",script)
         self.assertIn("stream: true",script)

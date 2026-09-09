@@ -66,8 +66,20 @@ python manage.py create-admin --username admin
 ```powershell
 python app.py
 Invoke-RestMethod http://127.0.0.1:5000/health
+Invoke-RestMethod http://127.0.0.1:5000/ready
 python manage.py diagnose --ai --infer
 ```
+
+`python app.py` 仅用于本地开发。生产环境使用 Waitress WSGI：
+
+```powershell
+$env:COOKIE_SECURE='1'
+$env:APP_ENV='production'
+python -m wsgi
+# 或 .\scripts\start-waitress.ps1 -Port 5000 -Threads 8
+```
+
+生产入口会拒绝未启用 `COOKIE_SECURE=1` 的配置；反向代理应负责 HTTPS、HSTS、访问日志和进程自动重启。`/health` 只检查数据库连接，`/ready` 还会检查 schema contract drift。
 
 `diagnose --ai --infer` 会检查数据库/schema 和所选 Provider 的模型推理链；不会输出密钥。百炼默认模型为 `qwen-plus`；DeepSeek Provider 使用 `deepseek-v4-pro`，也可通过环境变量切换为 `deepseek-v4-flash`。
 
@@ -87,7 +99,7 @@ Agent 风险采用 R0-R3：R0 只读；R1 普通可恢复写入；R2 重要关�
 python -m unittest discover -s tests -v
 ```
 
-当前 `tests/` 静态统计为 131 个 `test_*` 用例，覆盖 V2 领域服务、数据范围越权、旧页面回归、迁移/DDL、财务精度与冲销、Agent 确认闭环、授权指纹/最小披露、百炼 OpenAI 兼容 HTTP/SSE 和失败回滚；Windows 全量回归已通过。
+当前 CI 运行 SQLite 与 MySQL 两套后端，并包含 compile、schema drift、Agent 跨请求状态/幂等和 WSGI smoke。依赖发布使用 `requirements.lock.txt`；GitHub 仓库需启用 required checks 和 PR review（可运行 `python scripts/check_branch_protection.py` 验证）。
 
 ## 目录
 

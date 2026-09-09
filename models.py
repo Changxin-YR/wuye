@@ -142,10 +142,33 @@ class AiConversation(Base):
     __tablename__ = 'ai_conversation'
     id = Column(String(36),primary_key=True)
     user_id = Column(Integer,ForeignKey('sys_user.id'),nullable=False,index=True)
+    auth_version = Column(Integer,nullable=False,default=1,server_default='1')
     upstream_id = Column(String(128),nullable=False,default='')
     scope_hash = Column(String(64),nullable=False,default='')
+    state_json = Column(Text,nullable=True,default='{}')
+    messages_json = Column(Text,nullable=True,default='[]')
     created_at = Column(DateTime,default=utcnow,nullable=False)
     updated_at = Column(DateTime,default=utcnow,onupdate=utcnow,nullable=False)
+
+class ConversationState(Base):
+    __tablename__ = 'conversation_state'
+    id = Column(Integer,primary_key=True)
+    conversation_id = Column(String(36),ForeignKey('ai_conversation.id',ondelete='CASCADE'),nullable=False,unique=True)
+    user_id = Column(Integer,ForeignKey('sys_user.id'),nullable=False,index=True)
+    auth_version = Column(Integer,nullable=False,default=1,server_default='1')
+    state_json = Column(Text,nullable=True,default='{}')
+    updated_at = Column(DateTime,default=utcnow,onupdate=utcnow,nullable=False)
+
+class ConversationMessage(Base):
+    __tablename__ = 'conversation_message'
+    id = Column(Integer,primary_key=True)
+    conversation_id = Column(String(36),ForeignKey('ai_conversation.id',ondelete='CASCADE'),nullable=False,index=True)
+    user_id = Column(Integer,ForeignKey('sys_user.id'),nullable=False,index=True)
+    sequence = Column(Integer,nullable=False)
+    role = Column(String(20),nullable=False)
+    content = Column(Text,nullable=False,default='')
+    created_at = Column(DateTime,default=utcnow,nullable=False)
+    __table_args__ = (UniqueConstraint('conversation_id','sequence',name='uk_conversation_message_sequence'),)
 
 class SchemaMigration(Base):
     __tablename__ = 'schema_migration'
@@ -171,6 +194,7 @@ class AiAction(Base):
     command = Column(String(40),nullable=False)
     payload = Column(Text,nullable=False)
     payload_hash = Column(String(64),nullable=False)
+    request_key = Column(String(100),nullable=False,default='',server_default='')
     preview = Column(Text,nullable=False)
     status = Column(String(20),nullable=False,default='pending')
     result = Column(Text,nullable=False,default='')

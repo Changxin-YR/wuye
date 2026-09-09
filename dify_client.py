@@ -77,6 +77,14 @@ class BailianClient:
         if conversation_id:
             self._histories[(user,conversation_id)]=deepcopy(messages[-24:])
 
+    def hydrate_history(self, user, conversation_id, messages):
+        """Restore the bounded history persisted by the application database."""
+        if conversation_id and isinstance(messages, list):
+            self._histories[(user, conversation_id)] = deepcopy(messages[-24:])
+
+    def get_history(self, user, conversation_id):
+        return deepcopy(self._histories.get((user, conversation_id), []))
+
     @property
     def configured(self):
         return bool(self.api_key and not self.api_key.startswith(('sk-your','your-','replace-')) and self.base_url and self.model)

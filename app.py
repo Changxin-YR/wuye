@@ -22,11 +22,12 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from agent_tools import action_view, available_commands, confirm, grant_actor, propose, structured_result
+from agent_tools import action_view, agent_request_key, available_commands, confirm, grant_actor, propose, structured_result
+from agent_state import load_messages, load_state, save_state
 from agent_planner import building_name_variants, plan_request
 from agent_security import error_code_for, issue_agent_token, redact_provider_text, safe_record
 from business import BusinessService
-from database import make_engine, missing_schema
+from database import CONTRACT_REVISION, REVISION, make_engine, missing_schema
 from bootstrap import seed_catalog
 from database import environment
 from management import bp as management_bp
@@ -34,7 +35,7 @@ from property_service import audit as domain_audit,snapshot as domain_snapshot
 from business_queries import query as domain_query
 from permissions import Policy
 from dify_client import BailianClient, DeepSeekClient, DifyClient, DifyUnavailable, OpenAICompatibleAgentClient, _PLANNER_HINT, _TOOL_COMMANDS
-from models import AiAction, AiGrant, AiConversation, AuditLog, Base, Community, Evaluation, House, Notice, Notification, OrderLog, Person, User, WorkOrder, utcnow
+from models import AiAction, AiGrant, AiConversation, AuditLog, Base, Community, Evaluation, House, Notice, Notification, OrderLog, Person, SchemaMigration, User, WorkOrder, utcnow
 from services import InvalidTransition, ORDER_TYPES, ROLE_TEXT, STATUS_TEXT, can_access_order, log_order, notify, notify_admins, scope_orders, transition_status
 
 PROJECT_ROOT=Path(__file__).resolve().parent
@@ -57,13 +58,19 @@ def create_app(test_config=None):
         DIFY_BASE_URL=os.getenv('DIFY_BASE_URL','http://127.0.0.1/v1'),DIFY_API_KEY=os.getenv('DIFY_API_KEY',''),
         DIFY_TIMEOUT=int(os.getenv('DIFY_TIMEOUT','60')),APP_ENV=os.getenv('APP_ENV','production'))
     if test_config:app.config.update(test_config)
+    if not app.testing and app.config['APP_ENV']=='production' and not app.config['SESSION_COOKIE_SECURE'] and (('APP_ENV' in (test_config or {})) or os.getenv('COOKIE_SECURE') is not None):
+        raise RuntimeError('生产环境必须启用 Secure Cookie（COOKIE_SECURE=1）')
     if not app.testing and (len(app.config['SECRET_KEY'])<32 or app.config['SECRET_KEY'].startswith('replace-')):
         raise RuntimeError('请配置至少32位随机SECRET_KEY，参见README')
     if not app.config['DATABASE_URL']:raise RuntimeError('请配置DATABASE_URL，参见README')
     engine=make_engine(app.config['DATABASE_URL'])
     if app.testing:
         Base.metadata.create_all(engine)
-        with engine.begin() as conn:seed_catalog(conn);environment(conn,'test')
+        with engine.begin() as conn:
+            seed_catalog(conn);environment(conn,'test')
+            for revision in (REVISION,CONTRACT_REVISION):
+                if not conn.execute(select(SchemaMigration.revision).where(SchemaMigration.revision==revision)).first():
+                    conn.execute(SchemaMigration.__table__.insert().values(revision=revision,applied_at=utcnow()))
         app.config['APP_ENV']='test'
     elif missing_schema(engine):
         engine.dispose()
@@ -80,12 +87,12 @@ def create_app(test_config=None):
         ai_client=DeepSeekClient(app.config['DEEPSEEK_BASE_URL'],app.config['DEEPSEEK_API_KEY'],app.config['DEEPSEEK_MODEL'],app.config['DIFY_TIMEOUT'])
     else:
         ai_client=BailianClient(app.config['BAILIAN_BASE_URL'],app.config['BAILIAN_API_KEY'],app.config['BAILIAN_MODEL'],app.config['DIFY_TIMEOUT'])
-    app.extensions.update(db_engine=engine,db_session=factory,dify=ai_client,ai=ai_client,agent_contexts={})
+    app.extensions.update(db_engine=engine,db_session=factory,dify=ai_client,ai=ai_client)
     folder=Path(app.config['UPLOAD_FOLDER'])
     if not folder.is_absolute():folder=PROJECT_ROOT/folder
     folder.mkdir(parents=True,exist_ok=True);app.config['UPLOAD_FOLDER']=str(folder)
 
-    def wants_json():return request.path.startswith('/ai/') or request.path=='/health' or request.path.startswith('/api/')
+    def wants_json():return request.path.startswith('/ai/') or request.path in {'/health','/ready'} or request.path.startswith('/api/')
 
     def error_response(message,status,code=None):
         if wants_json():return make_response(jsonify(error=message,code=code or error_code_for(status,str(message))),status)
@@ -135,6 +142,8 @@ def create_app(test_config=None):
         response.headers['X-Frame-Options']='DENY'
         response.headers['Referrer-Policy']='same-origin'
         response.headers['Content-Security-Policy']="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        if app.config.get('APP_ENV')=='production' and app.config.get('SESSION_COOKIE_SECURE'):
+            response.headers['Strict-Transport-Security']='max-age=31536000; includeSubDomains'
         if request.path.startswith('/static/') and request.path.endswith('.js'):
             response.headers['Content-Type']='application/javascript; charset=utf-8'
         if not request.path.startswith('/static/'):response.headers['Cache-Control']='no-store'
@@ -292,6 +301,12 @@ def create_app(test_config=None):
     @app.get('/health')
     def health():
         g.db.execute(select(1));return jsonify(status='ok',database='ok')
+
+    @app.get('/ready')
+    def ready():
+        missing=missing_schema(engine)
+        if missing:return jsonify(status='not_ready',database='ok',schema='upgrade_required',missing=missing),503
+        g.db.execute(select(1));return jsonify(status='ok',database='ok',schema='ok')
 
     @app.get('/dashboard')
     @login_required
@@ -471,7 +486,7 @@ def create_app(test_config=None):
             if not conversation or conversation.user_id!=g.user.id:abort(403)
         context,digest=ai_context()
         authorized={item['command'] for item in context.get('commands', []) if isinstance(item,dict)} | set(context.get('queries', []))
-        planner_context=dict(app.extensions['agent_contexts'].get((g.user.id,cid),{})) if cid else {}
+        planner_context=load_state(g.db,conversation,g.user) if conversation else {}
         if 'resolved_order' not in planner_context:
             accessible_orders=list(g.db.scalars(Policy(g.db,g.user).query(WorkOrder).limit(2)))
             if len(accessible_orders)==1:
@@ -508,19 +523,26 @@ def create_app(test_config=None):
         if planner_hint.get('action') in {'CLARIFY','DISAMBIGUATE','DENY'} and planner_hint.get('entity_status') != 'REPEAT':
             local_conversation=conversation
             if not local_conversation:
-                local_conversation=AiConversation(id=str(uuid.uuid4()),user_id=g.user.id,scope_hash=digest)
+                local_conversation=AiConversation(id=str(uuid.uuid4()),user_id=g.user.id,auth_version=g.user.auth_version,scope_hash=digest)
                 g.db.add(local_conversation);g.db.flush()
+                save_state(g.db,local_conversation,g.user,planner_context)
             answers={'CLARIFY':'请补充必要的业务信息后再操作。','DISAMBIGUATE':'找到多个匹配对象，请提供更多信息以确认。','DENY':'该请求不在当前登录身份允许的范围内。'}
             return jsonify(answer=answers[planner_hint['action']],conversation_id=local_conversation.id,source='planner',scope=context['scope'],actions=[])
         upstream=conversation.upstream_id if conversation and conversation.scope_hash==digest else ''
         if g.db.scalar(select(func.count(AiGrant.id)).where(AiGrant.user_id==g.user.id,AiGrant.created_at>utcnow()-timedelta(minutes=1)))>=10:
             return jsonify(error='请求过于频繁，请稍后再试'),429
         token=issue_agent_token(Policy(g.db,g.user));gid=str(uuid.uuid4());uid=g.user.id;auth=g.user.auth_version
+        supplied_request_id=payload.get('agent_request_id')
+        if supplied_request_id is not None and (not isinstance(supplied_request_id,str) or not re.fullmatch(r'[A-Za-z0-9._:-]{8,80}',supplied_request_id)):
+            return jsonify(error='agent_request_id格式无效',code='VALIDATION_ERROR'),400
+        agent_request_id=supplied_request_id or uuid.uuid4().hex
         g.db.add(AiGrant(id=gid,token_hash=hashlib.sha256(token.encode()).hexdigest(),user_id=uid,auth_version=auth,expires_at=utcnow()+timedelta(minutes=3)))
         # Publish the narrow delegated grant before an external provider callback.
         # The database stores only the token hash and every callback rechecks IAM.
         g.db.commit()
         is_bailian=isinstance(app.extensions['dify'],OpenAICompatibleAgentClient)
+        if conversation and is_bailian and hasattr(app.extensions['dify'],'hydrate_history'):
+            app.extensions['dify'].hydrate_history(f'property:{uid}:v{auth}', conversation.upstream_id or conversation.id, load_messages(g.db,conversation,g.user))
         if is_bailian:
             # Local Bailian tool callbacks are bound to this closure. The grant
             # secret never needs to be placed in model-visible text.
@@ -704,7 +726,8 @@ def create_app(test_config=None):
                         mutation_commands.add(command)
                         return {'ok':True,'code':'ALREADY_EXECUTED','message':'已有报修记录，本轮未重复提交。','data':{'id':existing.id},'terminal':True}
                 from agent_tools import perform
-                item=perform(g.db,actor,grant,command,params) if operation=='execute' else propose(g.db,actor,grant,command,params)
+                request_key=agent_request_key(uid,conversation.id if conversation else 'new',agent_request_id,command)
+                item=perform(g.db,actor,grant,command,params,request_key=request_key) if operation=='execute' else propose(g.db,actor,grant,command,params,request_key=request_key)
                 result_view=action_view(item,model_safe=True)
                 if result_view.get('status') in {'executed','pending'}:mutation_commands.add(command)
                 g.db.commit();return structured_result(result_view,operation)
@@ -752,7 +775,7 @@ def create_app(test_config=None):
                     yield 'data: '+json.dumps({'type':'error','error':str(failure),'code':failure.code},ensure_ascii=False)+'\n\n';return
                 if not result:
                     yield 'data: '+json.dumps({'type':'error','error':'百炼未返回有效文本','code':'bad_response'},ensure_ascii=False)+'\n\n';return
-                if not conversation:conversation=AiConversation(id=str(uuid.uuid4()),user_id=uid);g.db.add(conversation)
+                if not conversation:conversation=AiConversation(id=str(uuid.uuid4()),user_id=uid,auth_version=auth);g.db.add(conversation)
                 conversation.upstream_id=result['conversation_id'];conversation.scope_hash=digest;conversation.updated_at=utcnow()
                 remembered=dict(planner_context)
                 values=planner_hint.get('arguments') or {}
@@ -769,10 +792,12 @@ def create_app(test_config=None):
                 if planner_hint.get('intent','').startswith('notice.'):
                     row=g.db.scalar(Policy(g.db,g.user).query(Notice).order_by(Notice.updated_at.desc()))
                     if row:remembered['resolved_notice']={'id':row.id,'title':row.title,'community_id':row.community_id,'building_id':row.building_id}
-                app.extensions['agent_contexts'][(uid,conversation.id)]=remembered
+                provider_id=result.get('conversation_id') or conversation.upstream_id or conversation.id
+                provider_messages = app.extensions['dify'].get_history(f'property:{uid}:v{auth}', provider_id) if hasattr(app.extensions['dify'],'get_history') else None
+                save_state(g.db,conversation,g.user,remembered,provider_messages)
                 actions=[action_view(x) for x in g.db.scalars(select(AiAction).where(AiAction.grant_id==gid).order_by(AiAction.created_at))]
                 g.db.commit()
-                yield 'data: '+json.dumps({'type':'done','conversation_id':conversation.id,'source':getattr(app.extensions['dify'],'provider','dify'),'scope':context['scope'],'actions':actions},ensure_ascii=False)+'\n\n'
+                yield 'data: '+json.dumps({'type':'done','conversation_id':conversation.id,'agent_request_id':agent_request_id,'source':getattr(app.extensions['dify'],'provider','dify'),'scope':context['scope'],'actions':actions},ensure_ascii=False)+'\n\n'
             return Response(stream_with_context(stream_result()),mimetype='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
         failure=None;result=None
         if not ai_slots.acquire(blocking=False):
@@ -799,7 +824,7 @@ def create_app(test_config=None):
         own_execution=g.db.scalar(select(AiAction.id).where(AiAction.grant_id==gid,AiAction.status=='executed').limit(1))
         if current_digest!=digest and not own_execution:return jsonify(error='业务数据在回答期间发生变化，请重新提问以获取当前信息'),409
         if failure:return jsonify(error=str(failure),code=failure.code),503
-        if not conversation:conversation=AiConversation(id=str(uuid.uuid4()),user_id=uid);g.db.add(conversation)
+        if not conversation:conversation=AiConversation(id=str(uuid.uuid4()),user_id=uid,auth_version=auth);g.db.add(conversation)
         conversation.upstream_id=result['conversation_id'];conversation.scope_hash=digest;conversation.updated_at=utcnow()
         remembered=dict(planner_context)
         values=planner_hint.get('arguments') or {}
@@ -816,8 +841,10 @@ def create_app(test_config=None):
         if planner_hint.get('intent','').startswith('notice.'):
             row=g.db.scalar(Policy(g.db,g.user).query(Notice).order_by(Notice.updated_at.desc()))
             if row:remembered['resolved_notice']={'id':row.id,'title':row.title,'community_id':row.community_id,'building_id':row.building_id}
-        app.extensions['agent_contexts'][(uid,conversation.id)]=remembered
-        return jsonify(answer=redact_provider_text(result['answer'],token),conversation_id=conversation.id,source=getattr(app.extensions['dify'],'provider','dify'),scope=context['scope'],
+        provider_id=result.get('conversation_id') or conversation.upstream_id or conversation.id
+        provider_messages = app.extensions['dify'].get_history(f'property:{uid}:v{auth}', provider_id) if hasattr(app.extensions['dify'],'get_history') else None
+        save_state(g.db,conversation,g.user,remembered,provider_messages)
+        return jsonify(answer=redact_provider_text(result['answer'],token),conversation_id=conversation.id,agent_request_id=agent_request_id,source=getattr(app.extensions['dify'],'provider','dify'),scope=context['scope'],
                        actions=[action_view(x) for x in g.db.scalars(select(AiAction).where(AiAction.grant_id==gid).order_by(AiAction.created_at))])
 
     @app.post('/api/agent/tools')
@@ -834,8 +861,13 @@ def create_app(test_config=None):
         except ValueError:abort(400,description='arguments_json不是有效JSON')
         if operation=='lookup':return jsonify(domain_query(g.db,actor,payload.get('command'),params))
         from agent_tools import perform
-        item=perform(g.db,actor,grant,payload.get('command'),params) if operation=='execute' else propose(g.db,actor,grant,payload.get('command'),params)
-        return jsonify(action_view(item,model_safe=True))
+        request_id=payload.get('agent_request_id') or uuid.uuid4().hex
+        if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9._:-]{8,80}',request_id):abort(400,description='agent_request_id格式无效')
+        request_key=agent_request_key(actor.id,'api',request_id,payload.get('command'))
+        item=perform(g.db,actor,grant,payload.get('command'),params,request_key=request_key) if operation=='execute' else propose(g.db,actor,grant,payload.get('command'),params,request_key=request_key)
+        result=action_view(item,model_safe=True)
+        result['agent_request_id']=request_id
+        return jsonify(result)
 
     @app.get('/ai/actions')
     @login_required
@@ -859,4 +891,5 @@ def create_app(test_config=None):
     return app
 
 if __name__=='__main__':
-    create_app().run(host=os.getenv('HOST','127.0.0.1'),port=int(os.getenv('PORT','5000')),debug=False)
+    from werkzeug.serving import run_simple
+    run_simple(os.getenv('HOST','127.0.0.1'),int(os.getenv('PORT','5000')),create_app(),use_reloader=False)

@@ -124,6 +124,12 @@ LEGACY_PERMISSION = {
 }
 
 
+def agent_request_key(user_id, conversation_id, request_id, command):
+    """Create a bounded, deterministic domain idempotency key."""
+    raw = f'{user_id}:{conversation_id or "new"}:{request_id}:{command}'
+    return 'agent:' + str(user_id) + ':' + hashlib.sha256(raw.encode()).hexdigest()[:64]
+
+
 def _domain_meta(command):
     permission, high_impact, parameters = DOMAIN_COMMANDS[command]
     risk = risk_for(command, high_impact=high_impact)
@@ -254,10 +260,10 @@ def _verification(db, actor, command, params, result):
     return {'status': 'service_validated'}
 
 
-def execute(db, actor, command, params):
+def execute(db, actor, command, params, request_key=None):
     params = normalize(actor, command, params)
     if command in DOMAIN_COMMANDS and not params.get('order_no'):
-        result = PropertyService(db, actor, source='agent').run(command, params)
+        result = PropertyService(db, actor, source='agent').run(command, params, request_key=request_key)
         if command == 'order.create':
             result['url'] = '/orders/' + result['record']['order_no']
         result['verification'] = _verification(db, actor, command, params, result)
@@ -345,7 +351,7 @@ def _agent_event(db, actor, action, item, detail=''):
     ))
 
 
-def propose(db, actor, grant, command, params):
+def propose(db, actor, grant, command, params, request_key=None):
     params = normalize(actor, command, params)
     encoded = json.dumps(params, sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha256((command + encoded).encode()).hexdigest()
@@ -366,7 +372,7 @@ def propose(db, actor, grant, command, params):
     preview['current'].append('预检结果（尚未执行）：' + validated.get('message', '校验通过'))
     item = AiAction(
         id=str(uuid.uuid4()), grant_id=grant.id, user_id=actor.id, auth_version=actor.auth_version,
-        command=command, payload=encoded, payload_hash=digest, preview=json.dumps(preview, ensure_ascii=False),
+        command=command, payload=encoded, payload_hash=digest, request_key=request_key or '', preview=json.dumps(preview, ensure_ascii=False),
         expires_at=utcnow() + timedelta(minutes=10),
     )
     db.add(item)
@@ -448,7 +454,7 @@ def confirm(db, actor, action_id):
     if item.expires_at <= utcnow():
         abort(410, description='操作已过期，请重新生成')
     # Re-run normalize + policy + row scope + optimistic version checks now.
-    result = execute(db, actor, item.command, json.loads(item.payload))
+    result = execute(db, actor, item.command, json.loads(item.payload), request_key=item.request_key or None)
     item.status = 'executed'
     item.result = json.dumps(result, ensure_ascii=False, default=str)
     _agent_event(db, actor, 'ai_execute', item, f"{item.command} confirmed_by_browser")
@@ -456,12 +462,12 @@ def confirm(db, actor, action_id):
     return action_view(item)
 
 
-def perform(db, actor, grant, command, params):
+def perform(db, actor, grant, command, params, request_key=None):
     """Auto-execute only R1 / explicitly safe R2; all other writes are pending."""
     params = normalize(actor, command, params)
     high = DOMAIN_COMMANDS[command][1] if command in DOMAIN_COMMANDS else command in HIGH_IMPACT
     if requires_confirmation(command, high_impact=high):
-        return propose(db, actor, grant, command, params)
+        return propose(db, actor, grant, command, params, request_key=request_key)
     encoded = json.dumps(params, sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha256((command + encoded).encode()).hexdigest()
     old = db.scalar(select(AiAction).where(AiAction.grant_id == grant.id, AiAction.payload_hash == digest))
@@ -469,11 +475,11 @@ def perform(db, actor, grant, command, params):
         return old
     if db.scalar(select(func.count(AiAction.id)).where(AiAction.grant_id == grant.id)) >= 5:
         abort(429, description='每轮最多执行5项，请分步处理')
-    result = execute(db, actor, command, params)
+    result = execute(db, actor, command, params, request_key=request_key)
     preview = describe(db, actor, command, params)
     item = AiAction(
         id=str(uuid.uuid4()), grant_id=grant.id, user_id=actor.id, auth_version=actor.auth_version,
-        command=command, payload=encoded, payload_hash=digest, preview=json.dumps(preview, ensure_ascii=False),
+        command=command, payload=encoded, payload_hash=digest, request_key=request_key or '', preview=json.dumps(preview, ensure_ascii=False),
         status='executed', result=json.dumps(result, ensure_ascii=False, default=str),
         expires_at=utcnow() + timedelta(minutes=10),
     )

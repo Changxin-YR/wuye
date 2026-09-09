@@ -21,7 +21,9 @@ class QuietRequestHandler(WSGIRequestHandler):
 class DifySimulator(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def send_json(self,obj,status=200):
-        raw=json.dumps(obj).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
+        raw=json.dumps(obj).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers()
+        try:self.wfile.write(raw)
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):pass
     def do_GET(self):
         self.server.headers_seen=dict(self.headers)
         if self.server.mode=='authentication':return self.send_json({'error':'private-secret'},401)
@@ -61,7 +63,7 @@ class DifySimulator(BaseHTTPRequestHandler):
             return
         try:
             for item in events:self.wfile.write(('data: '+json.dumps(item,ensure_ascii=False)+'\n\n').encode());self.wfile.flush()
-        except (BrokenPipeError,ConnectionResetError):pass
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):pass
 
 class DifyWireTests(unittest.TestCase):
     @classmethod

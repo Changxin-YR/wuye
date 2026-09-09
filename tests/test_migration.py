@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateTable,CreateIndex
 from sqlalchemy.dialects import mysql
 from app import create_app
-from database import make_engine,initialize,missing_schema,upgrade
+from database import make_engine,initialize,missing_schema,upgrade,schema_contract_drift
 from models import Base,User,House,WorkOrder
 from fixtures import legacy_models as old
 
@@ -50,3 +50,11 @@ class MigrationTests(unittest.TestCase):
         for table in Base.metadata.sorted_tables:
             self.assertIn('CREATE TABLE',str(CreateTable(table).compile(dialect=mysql.dialect())))
             for index in table.indexes:self.assertIn('CREATE INDEX',str(CreateIndex(index).compile(dialect=mysql.dialect())))
+
+    def test_schema_contract_detects_removed_index(self):
+        initialize(self.engine)
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql('DROP INDEX idx_order_owner_status')
+        drift=schema_contract_drift(self.engine)
+        self.assertIn('work_order:index:idx_order_owner_status',drift)
+        self.assertTrue(missing_schema(self.engine))

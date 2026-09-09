@@ -17,7 +17,10 @@ class BailianSimulator(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(raw)))
         self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
 
     def do_GET(self):
         if self.server.mode == 'auth':
@@ -53,10 +56,16 @@ class BailianSimulator(BaseHTTPRequestHandler):
                 {'id': 'chatcmpl-stream', 'choices': [{'delta': {'content': '已收到'}, 'finish_reason': 'stop'}]},
                 ]
             for event in events:
-                self.wfile.write(('data: ' + json.dumps(event, ensure_ascii=False) + '\n\n').encode())
+                try:
+                    self.wfile.write(('data: ' + json.dumps(event, ensure_ascii=False) + '\n\n').encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+            try:
+                self.wfile.write(b'data: [DONE]\n\n')
                 self.wfile.flush()
-            self.wfile.write(b'data: [DONE]\n\n')
-            self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                return
             return
         return self.send_json({'id': 'chatcmpl-1', 'choices': [{'message': {'content': '百炼已收到'}}]})
 

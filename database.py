@@ -3,10 +3,11 @@ import os
 from sqlalchemy import create_engine,event,inspect,text,select
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.schema import CreateColumn,CreateTable,AddConstraint
-from sqlalchemy import CheckConstraint
+from sqlalchemy import CheckConstraint,UniqueConstraint
 from models import Base,utcnow,SchemaMigration,House,User,WorkOrder,SystemSetting
 from bootstrap import seed_catalog,assign_legacy,normalize_house
 REVISION='property_v2'
+CONTRACT_REVISION='property_v2_001'
 
 def make_engine(url):
     kwargs={'pool_pre_ping':True}
@@ -17,6 +18,38 @@ def make_engine(url):
         def configure(conn,record):conn.execute('PRAGMA foreign_keys=ON');conn.execute('PRAGMA busy_timeout=5000')
     return engine
 
+def _type_signature(value):
+    typ=getattr(value,'type',value)
+    visit=getattr(typ,'__visit_name__',typ.__class__.__name__.lower()).lower()
+    visit={'varchar':'string','char':'string','nvarchar':'string','bigint':'integer','smallint':'integer','tinyint':'integer','numeric':'decimal'}.get(visit,visit)
+    return (visit,getattr(typ,'length',None),getattr(typ,'precision',None),getattr(typ,'scale',None))
+
+def schema_contract_drift(engine):
+    """Return catalog contract mismatches instead of treating columns-only as healthy."""
+    inspector=inspect(engine);existing=set(inspector.get_table_names());drift=[]
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing:continue
+        actual={item['name']:item for item in inspector.get_columns(table.name)}
+        for column in table.columns:
+            item=actual.get(column.name)
+            if not item:continue
+            if _type_signature(item['type'])!=_type_signature(column.type):drift.append(f'{table.name}.{column.name}:type')
+            if bool(item.get('nullable',True))!=bool(column.nullable):drift.append(f'{table.name}.{column.name}:nullable')
+        actual_unique={item.get('name') for item in inspector.get_unique_constraints(table.name) if item.get('name')}
+        expected_unique={item.name for item in table.constraints if isinstance(item,UniqueConstraint) and item.name}
+        drift.extend(f'{table.name}:unique:{name}' for name in sorted(expected_unique-actual_unique))
+        actual_indexes={item.get('name') for item in inspector.get_indexes(table.name) if item.get('name')}
+        expected_indexes={item.name for item in table.indexes if item.name}
+        drift.extend(f'{table.name}:index:{name}' for name in sorted(expected_indexes-actual_indexes))
+        actual_checks={item.get('name') for item in inspector.get_check_constraints(table.name) if item.get('name')}
+        expected_checks={item.name for item in table.constraints if isinstance(item,CheckConstraint) and item.name}
+        drift.extend(f'{table.name}:check:{name}' for name in sorted(expected_checks-actual_checks))
+        actual_fks={(tuple(item.get('constrained_columns') or ()),item.get('referred_table'),tuple(item.get('referred_columns') or ())) for item in inspector.get_foreign_keys(table.name)}
+        for fk in table.foreign_key_constraints:
+            expected=(tuple(column.name for column in fk.columns),fk.elements[0].column.table.name,tuple(element.column.name for element in fk.elements))
+            if expected not in actual_fks:drift.append(f'{table.name}:foreign_key:{"-".join(expected[0])}')
+    return sorted(set(drift))
+
 def missing_schema(engine):
     inspector=inspect(engine);existing=set(inspector.get_table_names());missing=[]
     for table in Base.metadata.sorted_tables:
@@ -24,8 +57,10 @@ def missing_schema(engine):
         cols={c['name'] for c in inspector.get_columns(table.name)}
         missing.extend(f'{table.name}.{c.name}' for c in table.columns if c.name not in cols)
     if not missing:
+        missing.extend(schema_contract_drift(engine))
+    if not missing:
         with engine.connect() as c:
-            if not c.execute(select(SchemaMigration.revision).where(SchemaMigration.revision==REVISION)).first():missing.append('schema_migration.'+REVISION)
+            if not c.execute(select(SchemaMigration.revision).where(SchemaMigration.revision==CONTRACT_REVISION)).first():missing.append('schema_migration.'+CONTRACT_REVISION)
     return missing
 
 def environment(conn,env=None):
@@ -39,7 +74,8 @@ def initialize(engine):
     if inspect(engine).get_table_names():raise ValueError('数据库已有表，请使用upgrade-db；不会覆盖现有数据')
     Base.metadata.create_all(engine)
     with engine.begin() as c:
-        seed_catalog(c);environment(c);c.execute(SchemaMigration.__table__.insert().values(revision=REVISION,applied_at=utcnow()))
+        seed_catalog(c);environment(c)
+        c.execute(SchemaMigration.__table__.insert(),[{'revision':REVISION,'applied_at':utcnow()},{'revision':CONTRACT_REVISION,'applied_at':utcnow()}])
 
 def rebuild_sqlite(engine,table_names):
     # SQLite requires a table rebuild to add foreign keys and replace old unique keys.
@@ -113,4 +149,5 @@ def upgrade(engine):
             if index.name not in present:index.create(engine)
     with engine.begin() as c:
         if not c.execute(select(SchemaMigration.revision).where(SchemaMigration.revision==REVISION)).first():c.execute(SchemaMigration.__table__.insert().values(revision=REVISION,applied_at=utcnow()))
+        if not c.execute(select(SchemaMigration.revision).where(SchemaMigration.revision==CONTRACT_REVISION)).first():c.execute(SchemaMigration.__table__.insert().values(revision=CONTRACT_REVISION,applied_at=utcnow()))
     return changes
