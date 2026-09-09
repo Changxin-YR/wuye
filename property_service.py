@@ -86,3 +86,34 @@ class PropertyService(_CorePropertyService):
             if house is not None:
                 house.occupancy = 'owner_occupied' if remaining_resident else 'vacant'
         return obj, message
+
+    def do_inspection(self, action):
+        if action == 'create':
+            device_id = self.integer('device_id')
+            assignee_id = self.integer('assignee_id')
+            due_at = self.moment('due_at')
+            checklist = self.text('checklist', 1000)
+
+            # A schedule is an instruction for future work. Persisting an
+            # already-expired deadline creates an immediately-invalid task and
+            # can also bypass operational SLA views that assume pending work is
+            # actionable.
+            if due_at <= utcnow():
+                abort(400, description='巡检截止时间必须晚于当前时间')
+
+            # Repeated UI/Agent submissions must not create identical pending
+            # work. Keep the rule narrow: a different assignee, deadline or
+            # checklist remains a distinct legitimate inspection assignment.
+            duplicate = self.db.scalar(
+                select(Inspection.id).where(
+                    Inspection.device_id == device_id,
+                    Inspection.assignee_id == assignee_id,
+                    Inspection.due_at == due_at,
+                    Inspection.checklist == checklist,
+                    Inspection.status == 'pending',
+                ).limit(1)
+            )
+            if duplicate:
+                abort(409, description='相同巡检任务仍在待处理，请勿重复创建')
+
+        return super().do_inspection(action)
