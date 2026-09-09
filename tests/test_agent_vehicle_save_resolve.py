@@ -23,11 +23,16 @@ def tool_call(call_id, operation, command, arguments):
 
 class VehicleSaveResolveTests(unittest.TestCase):
     AUTHORIZED = {'house.search', 'person.search', 'vehicle.save'}
+    REQUEST = '登记车牌粤A12345，车主王五，A栋101室'
 
-    def test_complete_business_request_uses_multi_resolution(self):
-        plan = plan_request('登记车牌粤A12345，车主王五，A栋101室', self.AUTHORIZED, {})
+    def install_patch(self):
+        plan = plan_request(self.REQUEST, self.AUTHORIZED, {})
         self.assertEqual((plan['intent'], plan['action']), ('vehicle.save', 'TOOL'))
         self.assertEqual(plan['entity_status'], 'RESOLVE_MULTI')
+        return plan
+
+    def test_complete_business_request_uses_multi_resolution(self):
+        plan = self.install_patch()
         self.assertEqual(plan['candidates'], ['house.search', 'person.search', 'vehicle.save'])
         self.assertEqual(plan['arguments']['plate'], '粤A12345')
         self.assertEqual(plan['arguments']['person_name'], '王五')
@@ -37,6 +42,7 @@ class VehicleSaveResolveTests(unittest.TestCase):
         self.assertNotIn('person_id', plan['arguments'])
 
     def test_model_cannot_guess_house_or_person_ids(self):
+        self.install_patch()
         client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
         callbacks = []
         responses = iter([
@@ -118,7 +124,7 @@ class VehicleSaveResolveTests(unittest.TestCase):
         try:
             with patch.object(client, '_request', side_effect=lambda *a, **k: next(responses)):
                 result = client.chat(
-                    '登记车牌粤A12345，车主王五，A栋101室',
+                    self.REQUEST,
                     'property:1:v1',
                     tool_callback=tool,
                 )
@@ -135,6 +141,7 @@ class VehicleSaveResolveTests(unittest.TestCase):
         self.assertEqual(result['execution_state'], 'EXECUTED')
 
     def test_ambiguous_house_stops_before_person_lookup_and_write(self):
+        self.install_patch()
         client = BailianClient('http://agent.invalid', 'key', 'qwen-plus')
         callbacks = []
         responses = iter([
@@ -166,7 +173,7 @@ class VehicleSaveResolveTests(unittest.TestCase):
         try:
             with patch.object(client, '_request', side_effect=lambda *a, **k: next(responses)):
                 result = client.chat(
-                    '登记车牌粤A12345，车主王五，A栋101室',
+                    self.REQUEST,
                     'property:1:v1',
                     tool_callback=tool,
                 )
