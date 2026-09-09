@@ -177,7 +177,8 @@ class AiChatLeaseCheckoutConfirmationEndToEndTests(unittest.TestCase):
             self.assertEqual(lease.status, 'ended')
             self.assertIsNotNone(lease.move_out)
             self.assertEqual(relation.status, 'ended')
-            self.assertFalse(relation.is_resident)
+            self.assertIsNotNone(relation.end_at)
+            self.assertIsNone(relation.active_key)
             self.assertEqual(db.get(House, house_id).occupancy, 'vacant')
             self.assertIsNotNone(db.scalar(select(AuditLog).where(
                 AuditLog.source == 'agent',
