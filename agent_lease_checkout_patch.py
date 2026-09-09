@@ -19,6 +19,7 @@ from permissions import Policy
 
 _QUERY_PATCH_FLAG = '_lease_search_query_patch_installed'
 _PROVIDER_PATCH_FLAG = '_lease_checkout_provider_patch_installed'
+_PLANNER_PATCH_FLAG = '_lease_checkout_planner_patch_installed'
 
 
 def _install_lease_search_query():
@@ -225,3 +226,22 @@ def repair_lease_checkout_plan(text, result, authorized_commands):
         'entity_status': 'RESOLVE_FIRST',
         'arguments': values,
     }
+
+
+def _install_planner_patch():
+    """Layer checkout repair after the mature financial/lease planner repairs."""
+    import agent_financial_planner
+
+    if getattr(agent_financial_planner, _PLANNER_PATCH_FLAG, False):
+        return
+    original_repair = agent_financial_planner.repair_financial_plan
+
+    def repair_financial_plan(text, result, authorized_commands):
+        repaired = original_repair(text, result, authorized_commands)
+        return repair_lease_checkout_plan(text, repaired, authorized_commands)
+
+    agent_financial_planner.repair_financial_plan = repair_financial_plan
+    setattr(agent_financial_planner, _PLANNER_PATCH_FLAG, True)
+
+
+_install_planner_patch()
