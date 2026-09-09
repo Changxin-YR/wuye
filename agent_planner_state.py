@@ -6,7 +6,7 @@ versions and risk checks are still enforced by the backend gateway and services.
 """
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 
 try:
@@ -73,7 +73,7 @@ def visitor_expected_at(text):
         minute = 30 if suffix == '半' else int(re.sub(r'分$', '', suffix) or 0)
         if minute > 59:
             return None
-    local_today = (datetime.utcnow() + timedelta(hours=8)).date()
+    local_today = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
     target = local_today + timedelta(days=day_offset)
     return datetime(target.year, target.month, target.day, hour, minute).isoformat(timespec='minutes')
 
