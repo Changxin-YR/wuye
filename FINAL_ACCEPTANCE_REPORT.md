@@ -2,11 +2,11 @@
 
 ## 当前基线
 
-- 代码提交：`a4a8987c254d1ada39ca6773d96ae5f18dd2d158`
+- 代码提交：`6011a51928e49bea3fd901c3fef6983f91e0dbc4`
 - 远端：`git@github.com:Changxin-YR/wuye.git`
-- 本地验证：`python -m unittest discover -s tests -q`，`406 tests OK`
+- 本地验证：`python -m unittest discover -s tests -q`，`407 tests OK`
 - 编译：`python -m compileall -q .`，通过
-- CI run：[#264](https://github.com/Changxin-YR/wuye/actions/runs/34423560422)，提交时为 `in_progress`；前一 run [#263](https://github.com/Changxin-YR/wuye/actions/runs/34373175084) SQLite/MySQL 均成功
+- CI run：[#266](https://github.com/Changxin-YR/wuye/actions/runs/34423953603)，SQLite/MySQL 均成功；前序 run [#265](https://github.com/Changxin-YR/wuye/actions/runs/34423776151) 亦成功
 
 ## P1
 
@@ -16,7 +16,7 @@
 | 跨请求幂等 | PASS | BusinessRequest + request_key，重复 payload 回放、冲突 409 |
 | Schema Contract / revision | PASS | 类型、长度、nullable、FK、索引、唯一/检查约束及 revision 检查 |
 | 生产 WSGI | PASS | Waitress `wsgi.py`、ProxyFix、`/health`、`/ready` smoke |
-| 远端 CI | PENDING | run #264 完成前不宣称双绿 |
+| 远端 CI | PASS | run #266 的 SQLite/MySQL job 均成功 |
 | GitHub Branch Protection | BLOCKED | 配置文件存在；查询远端需要 `GITHUB_TOKEN` |
 
 ## P2
