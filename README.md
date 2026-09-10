@@ -81,6 +81,8 @@ python -m wsgi
 
 生产入口会拒绝未启用 `COOKIE_SECURE=1` 的配置；反向代理应负责 HTTPS、HSTS、访问日志和进程自动重启。`/health` 只检查数据库连接，`/ready` 还会检查 schema contract drift。
 
+生产公网入口为 `https://www.23331.cloud/wuye/`。`https://www.23331.cloud/`、根域名 `https://23331.cloud/` 及其现有路径属于其他项目，不作为本项目入口；物业服务只监听服务器 `127.0.0.1:5003`，使用独立 systemd 用户、上传目录和 `property_workorder` 数据库账号。Nginx 配置模板见 `deploy/property-23331.nginx.conf`。
+
 `diagnose --ai --infer` 会检查数据库/schema 和所选 Provider 的模型推理链；不会输出密钥。百炼默认模型为 `qwen-plus`；DeepSeek Provider 使用 `deepseek-v4-pro`，也可通过环境变量切换为 `deepseek-v4-flash`。
 
 Agent OpenAPI 导入文件为 `config/dify_agent_openapi.json`，服务端地址按部署环境修改；工具只允许调用当前用户授权的业务命令，不接受模型或浏览器传入的角色、用户 ID 作为身份依据。默认百炼模式的短期委托令牌不会进入模型正文；Dify 外部回调兼容模式使用约 3 分钟短期令牌且数据库只保存哈希。
@@ -100,6 +102,8 @@ python -m unittest discover -s tests -v
 ```
 
 当前 CI 运行 SQLite 与 MySQL 两套后端，并包含 compile、schema drift、Agent 跨请求状态/幂等和 WSGI smoke。依赖发布使用 `requirements.lock.txt`；GitHub 仓库需启用 required checks 和 PR review（可运行 `python scripts/check_branch_protection.py` 验证）。
+
+维护窗口可运行 `python manage.py backup --output-dir backups` 生成 MySQL/SQLite 数据库备份、上传文件归档及 SHA-256 清单；交付前用 `python manage.py restore-test backups/property-...` 校验归档完整性，再按输出说明在隔离数据库执行实际恢复。该流程不删除或覆盖 `AuditLog`。
 
 ## 目录
 
