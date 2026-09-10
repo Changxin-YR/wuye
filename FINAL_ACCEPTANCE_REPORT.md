@@ -1,24 +1,41 @@
-# 美家物业 V2 当前验收报告
+# 美家物业 V2 + AI Agent 验收报告
 
-## 验收基线
+## 当前基线
 
-- 验收日期：2026-09-09
-- 代码基线：以最终合并提交的 exact SHA 为准（本工作树当前基线 `8728a26`，合并后需重新生成）
-- 测试命令：`python -m unittest discover -s tests -v`
-- 当前本地结果：`Ran 185 tests ... OK`
+- 代码提交：`a4a8987c254d1ada39ca6773d96ae5f18dd2d158`
+- 远端：`git@github.com:Changxin-YR/wuye.git`
+- 本地验证：`python -m unittest discover -s tests -q`，`406 tests OK`
+- 编译：`python -m compileall -q .`，通过
+- CI run：[#264](https://github.com/Changxin-YR/wuye/actions/runs/34423560422)，提交时为 `in_progress`；前一 run [#263](https://github.com/Changxin-YR/wuye/actions/runs/34373175084) SQLite/MySQL 均成功
 
-## 已修复上线阻塞项
+## P1
 
-1. Agent 会话状态和最多 24 条 Provider 消息持久化到数据库，按 `user_id + auth_version + conversation_id` 绑定；状态只保留业务 selector，不缓存旧 version。
-2. Agent 每次动作返回 `agent_request_id`，贯穿 Tool、`AiAction.request_key` 和 `PropertyService` 的 `BusinessRequest` 幂等回放；参数变化返回 409。
-3. schema 检查比较列类型/长度/nullability、唯一约束、检查约束、索引和外键，并记录 `property_v2_001` contract revision。
-4. 新增 `/ready` readiness、Waitress `wsgi.py` 入口和 Windows 启动脚本；生产 Secure Cookie 配置缺失时拒绝启动。
-5. CI 工作流覆盖 compile、SQLite、MySQL、WSGI smoke；依赖提供精确锁定文件。
+| 项目 | 状态 | 证据 |
+| --- | --- | --- |
+| Agent 持久化、多实例状态 | PASS | DB ConversationState/Message，406 项测试覆盖重启/跨实例路径 |
+| 跨请求幂等 | PASS | BusinessRequest + request_key，重复 payload 回放、冲突 409 |
+| Schema Contract / revision | PASS | 类型、长度、nullable、FK、索引、唯一/检查约束及 revision 检查 |
+| 生产 WSGI | PASS | Waitress `wsgi.py`、ProxyFix、`/health`、`/ready` smoke |
+| 远端 CI | PENDING | run #264 完成前不宣称双绿 |
+| GitHub Branch Protection | BLOCKED | 配置文件存在；查询远端需要 `GITHUB_TOKEN` |
 
-## 保留的安全基线
+## P2
 
-RBAC/DataScope、R0-R3 确认链、财务状态机、文件上传校验和 Provider 敏感信息最小披露均保持现有实现，并由原有测试覆盖。
+| 项目 | 状态 |
+| --- | --- |
+| Agent 状态 retention/cleanup | PASS |
+| 上下文按需披露 | NOT_TESTABLE | 当前版本仍保留有限预加载，后续应改为按 Tool 查询 |
+| 登录 username + IP 限流 | FAIL |
+| R3 step-up password/token | FAIL |
+| Secure Cookie/HSTS | PASS |
+| 依赖安全 | PASS (`pip-audit -r requirements.lock.txt`: no known vulnerabilities) |
+| 备份/恢复 | PARTIAL | `manage.py backup` + `restore-test` 已提供并完成归档校验；真实 MySQL restore drill 需目标环境 |
 
-## 未完成风险（P2）
+## Provider
 
-MFA/step-up、IP/设备限流、备份恢复演练、上下文按需检索、AI 状态 retention、完整浏览器 E2E、live Provider 验收和 GitHub Branch Protection 需要在部署环境完成，不能由本地单元测试替代。正式发布前应在目标 MySQL、当前 AI Provider 和反向代理链路重新执行验收，并把实际 HEAD SHA 写回本文件。
+- DeepSeek：PASS（普通推理、原生 Tool Call、`diagnose --ai --infer`）
+- Bailian：NOT_TESTABLE（未配置凭据）
+
+## 仍未解决
+
+远端 Branch Protection 未能由当前权限确认；登录 IP 限流、R3 step-up、按需上下文和真实 MySQL 恢复演练尚未完成。故当前结论仍为：暂不建议正式生产交付。
