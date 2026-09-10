@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import time
 import uuid
 from datetime import timedelta
 from threading import BoundedSemaphore
@@ -25,7 +26,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from agent_tools import action_view, agent_request_key, available_commands, confirm, grant_actor, propose, structured_result
 from agent_state import load_messages, load_state, save_state
 from agent_planner import building_name_variants, plan_request
-from agent_security import error_code_for, issue_agent_token, redact_provider_text, safe_record
+from agent_security import R3, error_code_for, issue_agent_token, redact_provider_text, risk_for, safe_record
 from business import BusinessService
 from database import CONTRACT_REVISION, REVISION, make_engine, missing_schema
 from bootstrap import seed_catalog
@@ -913,7 +914,16 @@ def create_app(test_config=None):
 
     @app.post('/ai/actions/<action_id>/confirm')
     @login_required
-    def ai_action_confirm(action_id):return jsonify(confirm(g.db,g.user,action_id))
+    def ai_action_confirm(action_id):
+        item=g.db.get(AiAction,action_id)
+        if app.config.get('APP_ENV')=='production' and item and item.status=='pending' and risk_for(item.command)==R3:
+            until=float(session.get('agent_step_up_until',0) or 0)
+            supplied=(request.get_json(silent=True) or {}).get('current_password') or request.form.get('current_password')
+            if until<=time.time():
+                if not isinstance(supplied,str) or not check_password_hash(g.user.password_hash,supplied):
+                    abort(401,description='R3 操作需要重新验证当前密码')
+                session['agent_step_up_until']=time.time()+300
+        return jsonify(confirm(g.db,g.user,action_id))
 
     @app.post('/ai/actions/<action_id>/cancel')
     @login_required

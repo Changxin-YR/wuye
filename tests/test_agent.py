@@ -62,6 +62,13 @@ class AgentTests(unittest.TestCase):
         r=self.confirm(id);self.assertEqual(r.status_code,200);self.assertEqual(r.json['status'],'executed')
         self.assertEqual(self.count(WorkOrder),1);self.assertEqual(self.count(OrderLog),1);self.assertEqual(self.count(Notification),1)
         repeat=self.confirm(id);self.assertEqual(repeat.status_code,200);self.assertEqual(repeat.json['result'],r.json['result']);self.assertEqual(self.count(WorkOrder),1)
+
+    def test_production_r3_confirm_requires_step_up_password(self):
+        self.app.config['APP_ENV']='production';self.login('admin')
+        token=self.grant(1);action_id=self.proposal(token,'house.delete',{'house_id':3,'version':1})
+        self.assertEqual(self.confirm(action_id).status_code,401)
+        confirmed=self.json_post('/ai/actions/'+action_id+'/confirm',{'current_password':'Demo-pass-123'})
+        self.assertEqual(confirmed.status_code,200,confirmed.get_data(as_text=True))
         with self.db() as db:self.assertEqual(db.scalar(select(func.count(AuditLog.id)).where(AuditLog.action=='ai_execute')),1)
     def test_confirm_requires_csrf(self):
         self.login();id=self.proposal(self.grant(),'order.create',self.create_params())

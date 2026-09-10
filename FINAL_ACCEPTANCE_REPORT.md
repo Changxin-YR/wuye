@@ -26,7 +26,7 @@
 | Agent 状态 retention/cleanup | PASS |
 | 上下文按需披露 | NOT_TESTABLE | 当前版本仍保留有限预加载，后续应改为按 Tool 查询 |
 | 登录 username + IP 限流 | FAIL |
-| R3 step-up password/token | FAIL |
+| R3 step-up password/token | PASS | 生产环境 R3 确认要求当前密码，成功后 5 分钟 session step-up |
 | Secure Cookie/HSTS | PASS |
 | 依赖安全 | PASS (`pip-audit -r requirements.lock.txt`: no known vulnerabilities) |
 | 备份/恢复 | PARTIAL | `manage.py backup` + `restore-test` 已提供并完成归档校验；真实 MySQL restore drill 需目标环境 |
@@ -38,4 +38,4 @@
 
 ## 仍未解决
 
-远端 Branch Protection 未能由当前权限确认；登录 IP 限流、R3 step-up、按需上下文和真实 MySQL 恢复演练尚未完成。故当前结论仍为：暂不建议正式生产交付。
+远端 Branch Protection 未能由当前权限确认；登录 IP 限流、按需上下文和真实 MySQL 恢复演练尚未完成。故当前结论仍为：暂不建议正式生产交付。
