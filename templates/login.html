@@ -1,6 +1,29 @@
-{% extends 'base.html' %}{% block title %}登录 · 美家物业{% endblock %}
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}登录 · {{ app_name }}{% endblock %}
 {% block auth_content %}
-<main class="auth-page"><div class="auth-glow"></div><section class="auth-card"><div class="auth-logo"><span class="brand-mark">美</span></div><span class="eyebrow">MEIJIA PROPERTY</span><h1>欢迎回来</h1><p class="muted">登录美家物业，继续处理社区服务</p>
-{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
-<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>用户名<input name="username" autocomplete="username" required autofocus></label><label>密码<input type="password" name="password" autocomplete="current-password" required></label><button class="primary full">登录</button></form><p class="auth-switch">还没有账号？<a href="{{ url_for('register') }}">立即注册</a></p></section></main>
+{% set error = error|default(none) %}
+{% set next = next|default('') %}
+<main class="auth-page">
+  <form class="panel auth-card" method="post" action="{{ url_for('login') }}">
+    <div class="brand auth-brand">
+      <span class="brand-mark">美</span>
+      <span><b>{{ app_name }}</b><small>社区服务工作台</small></span>
+    </div>
+    <h1>账号登录</h1>
+    <p class="muted">请使用物业给你的账号登录。</p>
+    {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+    {{ csrf_field() }}
+    <input type="hidden" name="next" value="{{ next or '' }}">
+    <label>用户名
+      <span class="label-req" title="必填">*</span><input name="username" autocomplete="username" autofocus required>
+    </label>
+    <label>密码
+      <span class="label-req" title="必填">*</span><input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <button class="primary full" type="submit">登录</button>
+    <p class="muted auth-foot">演示账号：admin（管理员）/ manager01（物业经理）/ service01（客服）/ engineer01（维修）/ finance01（会计）/ owner01（业主）</p>
+  </form>
+</main>
 {% endblock %}

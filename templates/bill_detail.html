@@ -1,0 +1,129 @@
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}账单 {{ bill.no }} · {{ app_name }}{% endblock %}
+{% block heading %}账单详情{% endblock %}
+{% block content %}
+{% set payments = payments|default([]) %}
+{% set can_manage = can_manage|default(can('billing.manage')) %}
+{% set can_collect = can_collect|default(can('billing.collect')) %}
+{#- 业主自助缴费入口：只有 billing.read 的账号缴自己房子的账单 #}
+{% set can_pay = can_pay|default(false) %}
+{% set can_settle = can_collect or can_pay %}
+{% set can_reverse = can_reverse|default(can('billing.reverse')) %}
+<div class="grid-2 detail-grid">
+  <div class="stack">
+    <section class="panel">
+      <a class="back-link" href="{{ url_for('bills') }}">← 返回账单列表</a>
+      <div class="detail-title">
+        <div>
+          <span class="eyebrow">{{ bill.no }}</span>
+          {#- 房屋缺失时不要留一个悬空的「·」 #}
+          {#- 标题口径与工单/投诉详情一致（house_full）；房屋缺失时不留悬空的「·」 #}
+          {% set where = bill.house_full or bill.house_text %}
+          <h2>{% if where %}{{ where }} · {% endif %}{{ bill.fee_type_text or bill.fee_type }}</h2>
+        </div>
+        <em class="status {{ status_cls(bill.status_class or 'dispatched') }}">{{ bill.status_text }}</em>
+      </div>
+      <dl class="detail-fields">
+        <div class="detail-pair">
+          <div><dt>应缴金额</dt><dd>{{ bill.amount }} 元</dd></div>
+          <div><dt>已缴金额</dt><dd>{{ bill.paid_amount|default(0) }} 元</dd></div>
+        </div>
+        <div class="detail-pair">
+          <div><dt>费用周期</dt><dd>{{ bill.period or '—' }}</dd></div>
+          <div><dt>缴费截止日</dt><dd>{{ bill.due_at|cn_time }}</dd></div>
+        </div>
+        <div class="detail-pair">
+          <div><dt>缴费人</dt><dd>{{ bill.person_name or '—' }}</dd></div>
+          <div><dt>生成时间</dt><dd>{{ bill.created_at|cn_time }}</dd></div>
+        </div>
+        {% if bill.remark %}<div><dt>备注</dt><dd>{{ bill.remark }}</dd></div>{% endif %}
+      </dl>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h3>收款记录</h3></div>
+      {% if payments %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>收款单号</th><th>金额</th><th>方式</th><th>状态</th><th>收款时间</th></tr></thead>
+          <tbody>
+            {% for item in payments %}
+            <tr>
+              <td>{{ item.no }}</td>
+              <td>{{ item.amount }} 元</td>
+              <td>{{ item.method_text or '—' }}</td>
+              <td><span class="status {{ status_cls(item.status_class or 'verifying') }}">{{ item.status_text }}</span></td>
+              <td class="muted">{{ item.created_at|cn_time }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+      <span class="empty-icon" aria-hidden="true">💰</span>
+      <span class="empty-text">还没有收款记录。</span>
+      <span class="empty-hint">收款成功后这里会显示每一笔记录。</span>
+    </div>
+      {% endif %}
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head"><h3>可以做的操作</h3></div>
+    {% if bill.status in (0, 1) and can_settle %}
+    <div class="actions">
+      <form method="post" action="{{ url_for('bills_command', bill_id=bill.id, action='collect') }}">
+        {{ csrf_field() }}
+        <label>{% if can_collect %}收款金额{% else %}缴费金额{% endif %}（元）<span class="label-req" title="必填">*</span><input name="amount" type="number" step="0.01" min="0.01" required></label>
+        {% if can_collect %}
+        <label>收款方式
+          <select name="method">
+            <option value="0">现金</option>
+            <option value="1" selected>银行转账</option>
+            <option value="2">其他</option>
+          </select>
+        </label>
+        {% else %}
+        <input type="hidden" name="method" value="1">
+        <p class="muted">支付方式：银行转账</p>
+        {% endif %}
+        <label>凭证号<input name="reference" maxlength="40" placeholder="选填"></label>
+        <button class="primary" type="submit">{% if can_collect %}确认收款{% else %}确认缴费{% endif %}</button>
+      </form>
+      {% if can_manage %}
+      <form method="post" action="{{ url_for('bills_command', bill_id=bill.id, action='void') }}" data-confirm="确定作废这张账单吗？">
+        {{ csrf_field() }}
+        <label>作废原因（必填）<span class="label-req" title="必填">*</span><input name="reason" maxlength="120" placeholder="例如：重复生成" required></label>
+        <button class="danger" type="submit">作废账单</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if can_reverse and bill.paid_amount and bill.paid_amount > 0 %}
+    <div class="actions">
+      <form method="post" action="{{ url_for('bills_command', bill_id=bill.id, action='reverse') }}" data-confirm="确定冲销收款吗？账单会回退到收款前的状态。">
+        {{ csrf_field() }}
+        <label>冲销原因（必填）<span class="label-req" title="必填">*</span><input name="reason" maxlength="120" placeholder="例如：收款金额录错" required></label>
+        <button class="danger" type="submit">冲销收款</button>
+      </form>
+    </div>
+    {% endif %}
+    {% if bill.status == 3 %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🚫</span>
+      <span class="empty-text">这张账单已作废，不能再收款。</span>
+      <span class="empty-hint">如需重新收取，请另建一张账单。</span>
+    </div>
+    {% elif bill.status == 2 and not can_reverse %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">✅</span>
+      <span class="empty-text">这张账单已缴清。</span>
+      <span class="empty-hint">如需退费，请用冲销操作。</span>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

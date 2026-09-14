@@ -1,1 +1,71 @@
-{% extends 'base.html' %}{% block heading %}管理审计{% endblock %}{% block content %}<section class="panel"><p class="muted">记录人员、房屋、公告操作。工单处理历史在各工单详情中查看。</p><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>说明</th></tr></thead><tbody>{% for log in logs %}<tr><td>{{ log.created_at|cn_time }}</td><td>#{{ log.operator_id }}</td><td>{{ log.action }}</td><td>{{ log.target }}</td><td>{{ log.detail }}</td></tr>{% else %}<tr><td colspan="5">暂无记录</td></tr>{% endfor %}</tbody></table></div>{% include '_pagination.html' %}</section>{% endblock %}
+{% extends "base.html" %}
+{% block title %}操作记录 · {{ app_name }}{% endblock %}
+{% block heading %}操作记录{% endblock %}
+{% block content %}
+{% set logs = logs|default(audit_logs|default([])) %}
+{% set source_filter = source_filter|default('') %}
+{% set keyword = keyword|default('') %}
+{% set page = page|default(1) %}
+{% set pages = pages|default(1) %}
+{% set total = total|default(0) %}
+<section class="toolbar">
+  <div class="filters">
+    <a class="pill {{ 'selected' if not source_filter else '' }}"
+       href="{{ url_for('audit', keyword=keyword or none) }}">全部</a>
+    <a class="pill {{ 'selected' if source_filter == 'web' else '' }}"
+       href="{{ url_for('audit', source='web', keyword=keyword or none) }}">网页操作</a>
+    <a class="pill {{ 'selected' if source_filter == 'agent' else '' }}"
+       href="{{ url_for('audit', source='agent', keyword=keyword or none) }}">AI 助手</a>
+  </div>
+  <form class="search-form" method="get" action="{{ url_for('audit') }}">
+    {% if source_filter %}<input type="hidden" name="source" value="{{ source_filter }}">{% endif %}
+    <input name="keyword" value="{{ keyword or '' }}" placeholder="按操作、对象或操作人搜索" maxlength="40">
+    <button class="secondary" type="submit">搜索</button>
+  </form>
+</section>
+
+<section class="panel table-panel">
+  {% if logs %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>来源</th><th>详情</th></tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td class="muted">{{ log.created_at|cn_time }}</td>
+          <td>{{ log.real_name or log.username or '系统' }}</td>
+          <td>{{ log.action_text or log.action }}</td>
+          <td>
+            {% if log.target_type_text %}{{ log.target_type_text }}{% elif log.target_type %}{{ log.target_type }}{% else %}—{% endif %}
+            {% if log.target_id %}<small class="muted"> #{{ log.target_id }}</small>{% endif %}
+          </td>
+          <td>
+            {% if log.source == 'agent' %}<em class="tag tag-agent">{{ log.source_text or 'AI 助手' }}</em>
+            {% else %}<span class="muted">{{ log.source_text or '网页操作' }}</span>{% endif %}
+          </td>
+          <td class="detail-cell">{{ log.detail_text or log.detail or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="pager">
+    {% if page > 1 %}<a class="secondary" href="{{ url_for('audit', source=source_filter or none, keyword=keyword or none, page=page-1) }}">上一页</a>{% endif %}
+    <span class="muted">第 {{ page }} / {{ pages }} 页，共 {{ total }} 条</span>
+    {% if page < pages %}<a class="secondary" href="{{ url_for('audit', source=source_filter or none, keyword=keyword or none, page=page+1) }}">下一页</a>{% endif %}
+  </nav>
+  {% else %}
+  <p class="muted pager-note">共 {{ total }} 条</p>
+  {% endif %}
+  {% else %}
+  <div class="empty">
+      <span class="empty-icon" aria-hidden="true">📋</span>
+      <span class="empty-text">还没有操作记录。</span>
+      <span class="empty-hint">页面操作和 AI 助手办理都会留下记录。</span>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

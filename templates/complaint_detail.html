@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}投诉 {{ complaint.no }} · {{ app_name }}{% endblock %}
+{% block heading %}投诉详情{% endblock %}
+{% block content %}
+{% set logs = logs|default([]) %}
+{% set actions = actions|default([]) %}
+{% set staff = staff|default([]) %}
+<div class="grid-2 detail-grid">
+  <div class="stack">
+    <section class="panel">
+      <a class="back-link" href="{{ url_for('complaints') }}">← 返回投诉列表</a>
+      <div class="detail-title">
+        <div>
+          <span class="eyebrow">{{ complaint.no }}</span>
+          <h2>{{ complaint.house_full }} · {{ complaint.category_text or '投诉' }}</h2>
+        </div>
+        <em class="status {{ status_cls(complaint.status_class or 'complaint') }}">{{ complaint.status_text }}</em>
+      </div>
+      <dl class="detail-fields">
+        <div><dt>投诉内容</dt><dd>{{ complaint.content }}</dd></div>
+        <div class="detail-pair">
+          <div><dt>投诉人</dt><dd>{{ complaint.reporter_name or '—' }}</dd></div>
+          <div><dt>联系电话</dt><dd>{{ complaint.reporter_phone or complaint.contact_phone or '—' }}</dd></div>
+        </div>
+        <div class="detail-pair">
+          <div><dt>处理人</dt><dd>{{ complaint.handler_name or '尚未分配' }}</dd></div>
+          <div><dt>登记时间</dt><dd>{{ complaint.created_at|cn_time }}</dd></div>
+        </div>
+        <div class="detail-pair">
+          <div><dt>结案时间</dt><dd>{{ complaint.closed_at|cn_time }}</dd></div>
+          <div><dt>处理结果</dt><dd>{{ complaint.result or '尚未填写' }}</dd></div>
+        </div>
+      </dl>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h3>处理过程</h3></div>
+      {% if logs %}
+      <div class="timeline">
+        {% for log in logs %}
+        <div class="timeline-item">
+          <i></i>
+          <div>
+            <b>{{ log.action_text or log.action }}</b>
+            <p>{{ log.from_status_text or '—' }} → {{ log.to_status_text or '—' }}{% if log.note %} · {{ log.note }}{% endif %}</p>
+            <small>{{ log.operator_name or '系统' }} · {{ log.created_at|cn_time }}</small>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🕒</span>
+      <span class="empty-text">还没有处理记录。</span>
+      <span class="empty-hint">处理动作会记录在这里。</span>
+    </div>
+      {% endif %}
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head"><h3>可以做的操作</h3></div>
+    {% if actions %}
+    <div class="actions">
+      {% for action in actions %}
+      <form method="post" action="{{ action.target or url_for('complaints_command', complaint_id=complaint.id, action=action.name) }}"
+            {% if action.name == 'cancel' %}data-confirm="确定取消这条投诉吗？"{% endif %}>
+        {{ csrf_field() }}
+        {% if action.name == 'assign' %}
+          {% if staff %}
+          <label>分配给处理人
+            <span class="label-req" title="必填">*</span><select name="handler" required>
+              <option value="">请选择处理人</option>
+              {% for member in staff %}<option value="{{ member.display_name or member.name or member.real_name }}">{{ member.display_name or member.name or member.real_name }}</option>{% endfor %}
+            </select>
+          </label>
+          {% else %}
+          <label>处理人姓名<span class="label-req" title="必填">*</span><input name="handler" maxlength="40" placeholder="填写处理人姓名" required></label>
+          {% endif %}
+          <button class="primary" type="submit">{{ action.label or '分配' }}</button>
+        {% elif action.name == 'cancel' %}
+          <label>取消原因（必填）<span class="label-req" title="必填">*</span><input name="reason" maxlength="120" placeholder="例如：投诉人已撤销" required></label>
+          <button class="danger" type="submit">{{ action.label or '取消投诉' }}</button>
+        {% else %}
+          <label>处理结果{% if action.need_note %}（必填）{% else %}（可不填）{% endif %}
+            <textarea name="result" rows="3" maxlength="500" placeholder="例如：已上门沟通，楼上承诺晚上九点后停止施工" {% if action.need_note %}required{% endif %}></textarea>
+          </label>
+          <button class="{% if action.style == 'primary' %}primary{% else %}secondary{% endif %}" type="submit">{{ action.label or '提交' }}</button>
+        {% endif %}
+      </form>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">👍</span>
+      <span class="empty-text">当前状态下你不需要做任何操作。</span>
+      <span class="empty-hint">有新进展时这里会出现可执行的操作。</span>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,171 @@
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}收费 · {{ app_name }}{% endblock %}
+{% block heading %}收费{% endblock %}
+{% block content %}
+{% set items = items|default([]) %}
+{# 后端可能直接给 can_* 布尔，也可能只有 can() 全局，两种都支持 #}
+{% set can_manage = can_manage|default(can('billing.manage')) %}
+{% set can_collect = can_collect|default(can('billing.collect')) %}
+{#- 业主自助缴费入口：只有 billing.read 的账号缴自己房子的账单 #}
+{% set can_pay = can_pay|default(false) %}
+{% set can_settle = can_collect or can_pay %}
+{% set can_reverse = can_reverse|default(can('billing.reverse')) %}
+{% set summary = summary|default({}) %}
+{% set houses = houses|default([]) %}
+{% set status_filter = status_filter|default('') %}
+{% set keyword = keyword|default('') %}
+{% set overdue = overdue|default(filters.overdue if filters is defined else '') %}
+{% set fee_types = fee_types|default([]) %}
+{% set page = page|default(1) %}{% set pages = pages|default(1) %}{% set total = total|default(0) %}
+<section class="stats stats-3">
+  <div class="stat">
+    <span>待缴金额</span>
+    <strong>{{ summary.unpaid_total|default(0) }}</strong>
+    <i class="dot dot-pending"></i>
+  </div>
+  <div class="stat">
+    <span>待缴账单</span>
+    <strong>{{ summary.unpaid_count|default(0) }}</strong>
+    <i class="dot dot-dispatched"></i>
+  </div>
+  <div class="stat">
+    <span>已收金额</span>
+    <strong>{{ summary.paid_total|default(0) }}</strong>
+    <i class="dot dot-verifying"></i>
+  </div>
+</section>
+
+<section class="toolbar">
+  <div class="filters">
+    <a class="pill {{ 'selected' if not status_filter else '' }}" href="{{ url_for('bills', keyword=keyword or none) }}">全部</a>
+    <a class="pill {{ 'selected' if overdue else '' }}"
+       href="{{ url_for('bills', overdue=1, keyword=keyword or none) }}">只看逾期</a>
+    {% for item in status_options|default([]) %}
+    <a class="pill {{ 'selected' if status_filter|string == item.value|string else '' }}"
+       href="{{ url_for('bills', status=item.value, keyword=keyword or none) }}">{{ item.text }}</a>
+    {% endfor %}
+  </div>
+  <div class="toolbar-actions">
+    <form class="search-form" method="get" action="{{ url_for('bills') }}">
+      {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+      <input name="keyword" value="{{ keyword }}" placeholder="按账单号、房号或姓名搜索" maxlength="40">
+      <button class="secondary" type="submit">搜索</button>
+    </form>
+    {% if can_manage %}
+    <details class="inline-editor toolbar-details">
+      <summary class="primary">＋ 建账单</summary>
+      <form method="post" action="{{ url_for('bills_command', action='create') }}">
+        {{ csrf_field() }}
+        <label>房屋
+          <span class="label-req" title="必填">*</span><select name="house_id" required>
+            <option value="">请选择房屋</option>
+            {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>缴费人
+          <select name="person_id">
+            <option value="">按房屋业主自动匹配</option>
+            {% for person in persons|default([]) %}<option value="{{ person.id }}">{{ person.name }} {{ person.phone }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>费用类型
+          <select name="fee_type">
+            {% for option in fee_types %}<option value="{{ option.value }}">{{ option.text }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>费用周期<input name="period" maxlength="20" placeholder="例如 2026-09"></label>
+        <label>应缴金额（元）<span class="label-req" title="必填">*</span><input name="amount" type="number" step="0.01" min="0" placeholder="例如 320.00" required></label>
+        <label>缴费截止日<input name="due_at" type="date"></label>
+        <button class="primary full" type="submit">生成账单</button>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel table-panel">
+  {% if items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>账单号</th><th>房屋</th><th>缴费人</th><th>费用类型</th><th>周期</th><th>应缴</th><th>已缴</th><th>状态</th><th>截止日</th><th>操作</th></tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td><a class="order-link" href="{{ url_for('bill_detail', bill_id=item.id) }}">{{ item.no }}</a></td>
+          <td>{{ item.house_text }}</td>
+          <td>{{ item.person_name or '—' }}</td>
+          <td>{{ item.fee_type_text or item.fee_type }}</td>
+          <td class="muted">{{ item.period or '—' }}</td>
+          <td>{{ item.amount }}</td>
+          <td>{{ item.paid_amount|default(0) }}</td>
+          <td><span class="status {{ status_cls(item.status_class or 'dispatched') }}">{{ item.status_text }}</span></td>
+          <td class="muted">{{ item.due_at|cn_time }}</td>
+          <td>
+            <div class="row-actions">
+              {% if can_settle and item.status in (0, 1) %}
+              <details class="inline-editor">
+                <summary class="text-link">{% if can_collect %}收款{% else %}缴费{% endif %}</summary>
+                <form method="post" action="{{ url_for('bills_command', bill_id=item.id, action='collect') }}">
+                  {{ csrf_field() }}
+                  <label>{% if can_collect %}收款金额{% else %}缴费金额{% endif %}（元）<span class="label-req" title="必填">*</span><input name="amount" type="number" step="0.01" min="0.01" value="{{ item.amount - item.paid_amount|default(0) if item.amount else '' }}" required></label>
+                  {% if can_collect %}
+                  <label>收款方式
+                    <select name="method">
+                      <option value="0">现金</option>
+                      <option value="1" selected>银行转账</option>
+                      <option value="2">其他</option>
+                    </select>
+                  </label>
+                  {% else %}
+                  <input type="hidden" name="method" value="1">
+                  <p class="muted">支付方式：银行转账</p>
+                  {% endif %}
+                  <label>凭证号<input name="reference" maxlength="40" placeholder="选填"></label>
+                  <button class="primary full" type="submit">{% if can_collect %}确认收款{% else %}确认缴费{% endif %}</button>
+                </form>
+              </details>
+              {% endif %}
+              {% if can_manage and item.status in (0, 1) %}
+              <form class="inline-form" method="post" action="{{ url_for('bills_command', bill_id=item.id, action='void') }}" data-confirm="确定作废账单「{{ item.no }}」吗？作废后不能再收款。">
+                {{ csrf_field() }}
+                <input type="hidden" name="reason" value="页面作废">
+                <button class="text-danger" type="submit">作废</button>
+              </form>
+              {% endif %}
+              {% if can_reverse and item.paid_amount and item.paid_amount > 0 %}
+              <details class="inline-editor">
+                <summary class="text-link">冲销</summary>
+                <form method="post" action="{{ url_for('bills_command', bill_id=item.id, action='reverse') }}" data-confirm="确定冲销这笔收款吗？账单单会回退到收款前的状态。">
+                  {{ csrf_field() }}
+                  <label>冲销原因（必填）<span class="label-req" title="必填">*</span><input name="reason" maxlength="120" placeholder="例如：收款时金额录错" required></label>
+                  <button class="danger full" type="submit">确认冲销</button>
+                </form>
+              </details>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="pager">
+    {% if page > 1 %}<a class="secondary" href="{{ url_for('bills', status=status_filter or none, keyword=keyword or none, page=page-1) }}">上一页</a>{% endif %}
+    <span class="muted">第 {{ page }} / {{ pages }} 页，共 {{ total }} 条</span>
+    {% if page < pages %}<a class="secondary" href="{{ url_for('bills', status=status_filter or none, keyword=keyword or none, page=page+1) }}">下一页</a>{% endif %}
+  </nav>
+  {% else %}<p class="muted pager-note">共 {{ total }} 条</p>{% endif %}
+  {% else %}
+  <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🔍</span>
+      <span class="empty-text">没有符合条件的账单。</span>
+      <span class="empty-hint">换个状态或关键词试试。</span>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

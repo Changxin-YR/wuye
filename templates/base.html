@@ -1,33 +1,85 @@
+{% from '_macros.html' import csrf_field with context %}
 <!doctype html>
+{#- AI 端点可能是蓝图（ai.*）也可能是 app 自带：按【端点是否真的注册】选（select('in', request.app.view_functions if request else {})），
+    这样不管装配方式、也不依赖 config 是否被塞过值，都不会 url_for 到不存在的端点。#}
+{% macro ai_page_url(session=None) %}{{ url_for(('ai.ai_page' if ('ai.ai_page' in (config.get('AI_ENDPOINTS') or []) or 'ai' in request.blueprints) else 'ai_page'), session=session) }}{% endmacro %}
+{% macro ai_new_url() %}{{ url_for('ai.ai_create_session' if ('ai.ai_create_session' in (config.get('AI_ENDPOINTS') or []) or 'ai' in request.blueprints) else 'ai_session_create') }}{% endmacro %}
+{% macro ai_chat_url() %}{{ url_for('ai.ai_chat' if ('ai.ai_chat' in (config.get('AI_ENDPOINTS') or []) or 'ai' in request.blueprints) else 'ai_chat') }}{% endmacro %}
+{% macro ai_messages_url(session_id) %}{{ url_for('ai.ai_session_messages' if ('ai.ai_session_messages' in (config.get('AI_ENDPOINTS') or []) or 'ai' in request.blueprints) else 'ai_session_messages', session_id=session_id) }}{% endmacro %}
+{% macro ai_actions_url() %}{{ url_for('ai.ai_list_actions' if ('ai.ai_list_actions' in (config.get('AI_ENDPOINTS') or []) or 'ai' in request.blueprints) else 'ai_actions') }}{% endmacro %}
+{#- 待确认动作的接口地址**模板**：输出形如 /ai/actions/{id}/confirm，
+    由 static/js/ai.js 把 {id} 换成卡片上的真实动作号。
+    url_for 的 action_id 走 int 转换器，塞不进 "{id}"，所以先用 0 建出真实路径，再把那一段换成占位符。
+    绝不能把 0 直接渲染出去：那样前端 replace('{id}') 落空，点「确认执行」会打到 /ai/actions/0/confirm，
+    后端查不到这条动作，用户只会看到「这条待确认动作不属于当前账号」。 #}
+{% macro ai_action_url_template(endpoint, fallback, tail) %}{{ url_for(endpoint if (endpoint in (config.get('AI_ENDPOINTS') or []) or 'ai' in request.blueprints) else fallback, action_id=0)|replace('/0/' + tail, '/{id}/' + tail) }}{% endmacro %}
+{% macro ai_action_url(action) %}{{ ai_action_url_template('ai.ai_confirm_action', 'ai_actions_confirm', 'confirm') }}{% endmacro %}
+{% macro ai_action_confirm_url() %}{{ ai_action_url_template('ai.ai_confirm_action', 'ai_actions_confirm', 'confirm') }}{% endmacro %}
+{% macro ai_action_cancel_url() %}{{ ai_action_url_template('ai.ai_cancel_action', 'ai_actions_cancel', 'cancel') }}{% endmacro %}
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="app-root" content="{{ request.script_root }}">
-  <title>{% block title %}美家物业{% endblock %}</title>
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block head_extra %}{% endblock %}
 </head>
 <body>
+{% set active_key = {'dashboard': 'dashboard', 'houses': 'houses', 'persons': 'persons', 'orders': 'orders', 'order_new': 'orders', 'order_create': 'orders', 'order_detail': 'orders', 'order_command': 'orders', 'ai_page': 'ai', 'ai.ai_page': 'ai', 'ai_session_create': 'ai', 'ai.ai_session_create': 'ai', 'ai_chat': 'ai', 'ai.ai_chat': 'ai', 'audit': 'audit'}.get(request.endpoint, '') %}
 {% if current_user %}
 <div class="app-shell">
   <aside class="sidebar">
-    <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">美</span><span><b>美家物业</b><small>社区服务工作台</small></span></a>
+    <a class="brand" href="{{ url_for('dashboard') }}">
+      <span class="brand-mark">美</span>
+      <span><b>{{ app_name }}</b><small>社区服务工作台</small></span>
+    </a>
     <nav>
-      <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' else '' }}">工作台</a>
-      {% for key,label in business_menu %}<a href="{{ url_for('management.page',name=key) }}" class="{{ 'active' if request.view_args and request.view_args.get('name') == key else '' }}">{{ label }}</a>{% endfor %}
-      <a href="{{ url_for('notifications') }}">站内通知{% if unread_count %}（{{ unread_count }}）{% endif %}</a>
-      <a href="{{ url_for('ai_page') }}">AI 助手</a>
-      <a href="{{ url_for('profile') }}">个人资料</a>
+      {% for item in nav %}
+      {# 高亮：兼容 nav 项只给 key（如 ai）或给蓝图端点（如 ai.ai_page）两种写法 #}
+      <a href="{{ item.href }}" class="{{ 'active' if item.key == active_key or (item.endpoint is defined and item.endpoint == request.endpoint) else '' }}">{{ item.label }}</a>
+      {% endfor %}
     </nav>
-    <div class="sidebar-user">{% if current_user.avatar %}<img class="avatar avatar-image" src="{{ current_user.avatar }}" alt="头像">{% else %}<div class="avatar">{{ current_user.username[:1]|upper }}</div>{% endif %}<div><strong>{{ current_user.real_name or current_user.username }}</strong><small>{{ business_role_names }}</small></div><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="logout" type="submit">退出</button></form></div>
+    <div class="sidebar-user">
+      <div class="avatar">{{ (current_user.real_name or current_user.name or current_user.username)[:1]|upper }}</div>
+      <div>
+        <strong>{{ current_user.real_name or current_user.name or current_user.username }}</strong>
+        <small>{{ current_user.role_names|join('、') }}</small>
+      </div>
+      <form method="post" action="{{ url_for('logout') }}">
+        {{ csrf_field() }}
+        <button class="logout" type="submit">退出</button>
+      </form>
+    </div>
   </aside>
+
   <main class="content">
-    <header class="topbar"><div><span class="eyebrow">MEIJIA PROPERTY</span><h1>{% block heading %}工作台{% endblock %}</h1></div><a class="top-action" href="{{ url_for('ai_page') }}">询问 AI <span>↗</span></a></header>
-    {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">MEIJIA PROPERTY</span>
+        <h1>{% block heading %}{{ app_name }}{% endblock %}</h1>
+      </div>
+      {# 只依赖主契约的全局（can/nav），不依赖 has_role #}
+      {% if can('order.read') or nav %}
+      <a class="top-action" href="{{ ai_page_url() }}">问 AI 助手 <span>↗</span></a>
+      {% endif %}
+    </header>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <div class="flash-stack">
+        {% for category, message in messages %}
+        <div class="flash {{ 'flash-error' if category == 'error' else '' }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endwith %}
     {% block content %}{% endblock %}
   </main>
 </div>
-{% else %}{% block auth_content %}{% endblock %}{% endif %}
+{% else %}
+{% block auth_content %}{% endblock %}
+{% endif %}
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-<script src="{{ url_for('static', filename='js/management.js') }}"></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

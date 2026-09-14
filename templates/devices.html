@@ -1,0 +1,181 @@
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}设备与巡检 · {{ app_name }}{% endblock %}
+{% block heading %}设备与巡检{% endblock %}
+{% block content %}
+{% set devices = devices|default([]) %}
+{% set inspections = inspections|default([]) %}
+{% set staff = staff|default([]) %}
+{% set buildings = buildings|default([]) %}
+{% set can_device = can_device|default(can('device.write')) %}
+{% set can_inspection = can_inspection|default(can('inspection.write')) %}
+{#- 这两个开关默认退回权限点口径（桩渲染不建模数据范围），真实路由会传范围感知后的值 #}
+{% set can_device_ledger = can_device_ledger|default(can_device) %}
+{% set can_to_order = can_to_order|default(can_inspection) %}
+{#- 派活入口按 inspection.assign：桩渲染不建模数据范围，默认就按权限点算 #}
+{% set can_inspection_assign = can_inspection_assign|default(can('inspection.assign')) %}
+<div class="grid-2 device-grid">
+  <section class="panel">
+    <div class="panel-head">
+      <h3>设备</h3>
+      {#- 台账维护（新增设备）是小区级动作：维修工的数据范围是 assigned，过不去，别给他按钮 #}
+      {% if can_device_ledger %}
+      <details class="inline-editor">
+        <summary class="icon-link">＋ 新增设备</summary>
+        <form method="post" action="{{ url_for('devices_command', action='create') }}">
+          {{ csrf_field() }}
+          <label>设备名称<span class="label-req" title="必填">*</span><input name="name" maxlength="60" placeholder="例如 1 栋 1 单元电梯" required></label>
+          <label>设备类别<input name="category" maxlength="30" placeholder="例如 电梯 / 水泵 / 门禁"></label>
+          <label>所在楼栋
+            <select name="building_id">
+              <option value="">不指定楼栋</option>
+              {% for item in buildings %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>安装位置<input name="location" maxlength="60" placeholder="例如 1 栋负一层"></label>
+          <button class="primary full" type="submit">保存</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% if devices %}
+    <div class="list scroll">
+      {% for item in devices %}
+      <div class="list-row">
+        <div class="list-main">
+          <b>{{ item.name }}</b>
+            <em class="status {{ status_cls(item.status_class) }}">{{ item.status_text }}</em>
+          <small>{{ item.category_text or item.category or '未分类' }} · {{ item.location or item.building_name or '未填位置' }}{% if item.inspection_count %} · 已巡检 {{ item.inspection_count }} 次{% endif %}{% if item.last_inspection_at %} · 最近 {{ item.last_inspection_at|cn_time }}{% endif %}</small>
+        </div>
+        {% if can_device %}
+        <details class="inline-editor">
+          <summary class="icon-link">更新</summary>
+          <form method="post" action="{{ url_for('devices_command', action='update') }}">
+            {{ csrf_field() }}
+            <input type="hidden" name="id" value="{{ item.id }}">
+            <label>设备名称<span class="label-req" title="必填">*</span><input name="name" value="{{ item.name }}" maxlength="60" required></label>
+            <label>安装位置<input name="location" value="{{ item.location or '' }}" maxlength="60"></label>
+            <label>设备状态
+              <select name="status">
+                <option value="0" {{ 'selected' if item.status == 0 else '' }}>正常</option>
+                <option value="1" {{ 'selected' if item.status == 1 else '' }}>维修中</option>
+              </select>
+            </label>
+            <label>备注<input name="note" maxlength="120" placeholder="选填"></label>
+            <button class="primary full" type="submit">保存</button>
+          </form>
+        </details>
+        {% if can_device_ledger and (item.status or 0) != 2 %}
+        <form class="inline-form" method="post" action="{{ url_for('devices_command', action='archive') }}" data-confirm="确定归档设备「{{ item.name }}」吗？归档后不再显示在默认列表。">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <button class="text-danger" type="submit">归档</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🛠</span>
+      <span class="empty-text">还没有设备。</span>
+      {% if can_device_ledger %}
+      <span class="empty-hint">点「＋ 新增设备」把电梯、水泵等登记进来。</span>
+      {% else %}
+      <span class="empty-hint">设备台账由物业经理或管理员维护；有指派给你的巡检任务时，相关设备会显示在这里。</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h3>巡检任务</h3>
+      {#- 看不到任何设备时，「＋ 新建巡检」打开只有一个空下拉框，是个死按钮 #}
+      {#- 派活（新建巡检）要 inspection.assign，维修工只有 inspection.write #}
+      {% if can_inspection_assign and devices %}
+      <details class="inline-editor">
+        <summary class="icon-link">＋ 新建巡检</summary>
+        <form method="post" action="{{ url_for('inspections_command', action='create') }}">
+          {{ csrf_field() }}
+          <label>巡检设备
+            <span class="label-req" title="必填">*</span><select name="device_id" required>
+              <option value="">请选择设备</option>
+              {% for item in devices %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>巡检人
+            {% if staff %}
+            <select name="assignee">
+              <option value="">待分配</option>
+              {% for member in staff %}<option value="{{ member.display_name or member.name or member.real_name }}">{{ member.display_name or member.name or member.real_name }}</option>{% endfor %}
+            </select>
+            {% else %}
+            <input name="assignee" maxlength="40" placeholder="巡检人姓名">
+            {% endif %}
+          </label>
+          <label>计划巡检时间<input name="plan_at" type="datetime-local">
+            <small class="label-hint">不填就按「现在」安排；要指定时间，点输入框里的日历图标选日期和时间</small>
+          </label>
+          <button class="primary full" type="submit">创建巡检</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% if inspections %}
+    <div class="list scroll">
+      {% for item in inspections %}
+      <div class="list-row">
+        <div class="list-main">
+          <b>{{ item.device_name }}</b>
+          <small>
+            计划 {{ item.plan_at|cn_time }} · 巡检人 {{ item.assignee_name or '未分配' }} · {{ item.status_text }}
+            {% if item.result %} · 结果：{{ item.result }}{% endif %}
+            {% if item.order_no %} · 已转报修单 {{ item.order_no }}{% endif %}
+          </small>
+        </div>
+        <div class="row-actions">
+          {% if item.status == 0 and can_inspection %}
+          <details class="inline-editor">
+            <summary class="icon-link">完成巡检</summary>
+            <form method="post" action="{{ url_for('inspections_command', inspection_id=item.id, action='complete') }}">
+              {{ csrf_field() }}
+              <label>巡检结果
+                <span class="label-req" title="必填">*</span><textarea name="result" rows="3" maxlength="500" placeholder="例如：运行正常，无异响" required></textarea>
+              </label>
+              <button class="primary full" type="submit">标记完成</button>
+            </form>
+          </details>
+          {% endif %}
+          {#- 转报修要建报修工单（order.create），维修工角色没有这个权限点 #}
+          {% if item.status == 1 and can_to_order %}
+          <details class="inline-editor">
+            <summary class="icon-link">发现故障</summary>
+            <form method="post" action="{{ url_for('inspections_command', inspection_id=item.id, action='to-order') }}" data-confirm="确定按这条巡检结果生成报修工单吗？">
+              {{ csrf_field() }}
+              <label>故障说明<input name="note" maxlength="200" placeholder="例如：轿厢有异响，需要检修"></label>
+              <button class="primary full" type="submit">转报修</button>
+            </form>
+          </details>
+          {% endif %}
+          {% if item.status not in (0, 1) %}—{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🧭</span>
+      <span class="empty-text">还没有巡检任务。</span>
+      {% if can_inspection_assign and devices %}
+      <span class="empty-hint">点「＋ 新建巡检」安排一次巡检。</span>
+      {% else %}
+      <span class="empty-hint">巡检任务由物业经理或管理员指派；指派给你之后，任务和对应设备就会出现在这里。</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

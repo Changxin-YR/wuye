@@ -4,10 +4,26 @@ import os
 from app import create_app
 
 
+def _is_loopback(host: str) -> bool:
+    """回环地址判定（本地演示时不能用 Secure Cookie，否则浏览器不回传会话）。"""
+    return (host or "").strip().lower() in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "")
+
+
 def create_production_app():
+    """生产/演示入口。
+
+    guard 口径：**production 且非回环**才强制 Secure Cookie。
+    - 本机回环（127.0.0.1）跑 http 时放行：否则本地 `python serve.py` 会直接 RuntimeError，
+      而浏览器在 http 下也不会回传 Secure Cookie，反而登录不上。
+    - 对外地址（隧道/真机域名）仍强制 `COOKIE_SECURE=1`，与线上一致。
+    """
     application = create_app()
-    if application.config.get('APP_ENV') == 'production' and not application.config.get('SESSION_COOKIE_SECURE'):
-        raise RuntimeError('生产环境必须启用 Secure Cookie（COOKIE_SECURE=1）')
+    if (
+        application.config.get("APP_ENV") == "production"
+        and not application.config.get("SESSION_COOKIE_SECURE")
+        and not _is_loopback(application.config.get("HOST", ""))
+    ):
+        raise RuntimeError("对外的生产环境必须启用 Secure Cookie（COOKIE_SECURE=1）")
     return application
 
 

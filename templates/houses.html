@@ -1,1 +1,221 @@
-{% extends 'base.html' %}{% block heading %}房屋管理{% endblock %}{% block content %}<section class="panel form-panel"><h3>添加房屋</h3><form method="post" class="form-grid"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="add"><label>栋名称<input name="building_name" maxlength="50" required></label><label>单元<input name="unit" maxlength="20" required></label><label>房号<input name="room_no" type="number" min="1" required></label><div><button class="primary">添加房屋</button></div></form></section><section class="panel"><h3>房屋与业主绑定</h3><p class="muted">物业核验居住信息后绑定；有未完成工单时不能解绑，已有历史工单的房屋不能删除。</p><div class="table-wrap"><table><thead><tr><th>房屋</th><th>业主</th><th>操作</th></tr></thead><tbody>{% for house in houses %}<tr><td>{{ house.building_name }} {{ house.unit }} {{ house.room_no }}</td><td>{{ (owners[house.owner_id].real_name or owners[house.owner_id].username) if house.owner_id in owners else '未绑定' }}</td><td><form method="post" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="house_id" value="{{ house.id }}"><input type="hidden" name="version" value="{{ house.version }}">{% if house.owner_id %}<button name="action" value="unbind" class="secondary">解除绑定</button>{% else %}<label>绑定业主<select name="owner_id"><option value="">选择业主</option>{% for u in owners.values() if u.active %}<option value="{{ u.id }}">{{ u.real_name or u.username }}（{{ u.username }}）</option>{% endfor %}</select></label><button name="action" value="bind" class="primary">核验后绑定</button><button name="action" value="delete" class="text-danger">删除空房</button>{% endif %}</form></td></tr>{% else %}<tr><td colspan="3">暂无房屋</td></tr>{% endfor %}</tbody></table></div>{% include '_pagination.html' %}</section>{% endblock %}
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}房屋档案 · {{ app_name }}{% endblock %}
+{% block heading %}房屋档案{% endblock %}
+{% block content %}
+{% set can_edit = can_edit|default(false) %}
+{% set houses = houses|default([]) %}
+{% set buildings = buildings|default([]) %}
+{% set communities = communities|default([]) %}
+{% set keyword = keyword|default('') %}
+{% set status_filter = status_filter|default('') %}
+{% set selected_community_id = selected_community_id|default(selected_community|default(none)) %}
+{% set selected_building_id = selected_building_id|default(selected_building|default(none)) %}
+{% set page = page|default(1) %}
+{% set pages = pages|default(1) %}
+{% set total = total|default(0) %}
+{% set house_status_options = house_status_options|default([]) %}
+<div class="grid-3">
+  <section class="panel">
+    <div class="panel-head">
+      <h3>小区</h3>
+      {% if can('community.write') %}
+      <details class="inline-editor">
+        <summary class="icon-link">＋ 新增</summary>
+        <form method="post" action="{{ url_for('houses_command', entity='community', action='create') }}">
+          {{ csrf_field() }}
+          <label>小区名称<span class="label-req" title="必填">*</span><input name="name" maxlength="60" required></label>
+          <label>地址<input name="address" maxlength="120"></label>
+          <button class="primary full" type="submit">保存</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% if communities %}
+    <div class="list">
+      {% for item in communities %}
+      <div class="list-row {{ 'active' if selected_community_id == item.id else '' }}">
+        <a class="list-main" href="{{ url_for('houses', community=item.id) }}">
+          <b>{{ item.name }}</b>
+          <small>{{ item.address or '未填地址' }} · {{ item.building_count }} 栋 / {{ item.house_count }} 套</small>
+        </a>
+        {% if can('community.write') %}
+        <details class="inline-editor">
+          <summary class="icon-link">编辑</summary>
+          <form method="post" action="{{ url_for('houses_command', entity='community', action='update') }}">
+            {{ csrf_field() }}
+            <input type="hidden" name="id" value="{{ item.id }}">
+            <label>小区名称<span class="label-req" title="必填">*</span><input name="name" value="{{ item.name }}" maxlength="60" required></label>
+            <label>地址<input name="address" value="{{ item.address or '' }}" maxlength="120"></label>
+            <button class="primary full" type="submit">保存</button>
+          </form>
+        </details>
+        <form class="inline-form" method="post" action="{{ url_for('houses_command', entity='community', action='delete') }}" data-confirm="确定删除小区「{{ item.name }}」吗？该小区下还有楼栋时无法删除。">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <button class="text-danger" type="submit">删除</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🏘</span>
+      <span class="empty-text">还没有小区。</span>
+      <span class="empty-hint">先建一个小区，再往下添加楼栋和房屋。</span>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h3>楼栋</h3>
+      {% if selected_community_id and can('community.write') %}
+      <details class="inline-editor">
+        <summary class="icon-link">＋ 新增</summary>
+        <form method="post" action="{{ url_for('houses_command', entity='building', action='create') }}">
+          {{ csrf_field() }}
+          <input type="hidden" name="community_id" value="{{ selected_community_id }}">
+          <label>楼栋名称<span class="label-req" title="必填">*</span><input name="name" maxlength="40" placeholder="例如 1 栋" required></label>
+          <button class="primary full" type="submit">保存</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% if not selected_community_id %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">👈</span>
+      <span class="empty-text">先选择左边的小区。</span>
+      <span class="empty-hint">选中小区后这里会显示它的楼栋。</span>
+    </div>
+    {% elif buildings %}
+    <div class="list">
+      {% for item in buildings %}
+      <div class="list-row {{ 'active' if selected_building_id == item.id else '' }}">
+        <a class="list-main" href="{{ url_for('houses', community=selected_community_id, building=item.id) }}">
+          <b>{{ item.name }}</b><small>{{ item.house_count }} 套房屋</small>
+        </a>
+        {% if can('community.write') %}
+        <details class="inline-editor">
+          <summary class="icon-link">编辑</summary>
+          <form method="post" action="{{ url_for('houses_command', entity='building', action='update') }}">
+            {{ csrf_field() }}
+            <input type="hidden" name="id" value="{{ item.id }}">
+            <label>楼栋名称<span class="label-req" title="必填">*</span><input name="name" value="{{ item.name }}" maxlength="40" required></label>
+            <button class="primary full" type="submit">保存</button>
+          </form>
+        </details>
+        <form class="inline-form" method="post" action="{{ url_for('houses_command', entity='building', action='delete') }}" data-confirm="确定删除楼栋「{{ item.name }}」吗？楼栋下还有房屋时无法删除。">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <button class="text-danger" type="submit">删除</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🏢</span>
+      <span class="empty-text">这个小区还没有楼栋。</span>
+      <span class="empty-hint">点右上角「＋ 新增」添加楼栋。</span>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h3>房屋</h3>
+      {% if can_edit and selected_building_id %}
+      <details class="inline-editor">
+        <summary class="icon-link">＋ 新增</summary>
+        <form method="post" action="{{ url_for('houses_command', entity='house', action='create') }}">
+          {{ csrf_field() }}
+          <input type="hidden" name="building_id" value="{{ selected_building_id }}">
+          <label>单元<input name="unit" maxlength="20" placeholder="例如 1 单元"></label>
+          <label>房号<span class="label-req" title="必填">*</span><input name="room" maxlength="20" placeholder="例如 101" required></label>
+          <label>面积（㎡）<input name="area" type="number" step="0.01" min="0"></label>
+          <label>状态
+            <select name="status">
+              {% for option in house_status_options %}
+              <option value="{{ option.value }}" {{ 'selected' if option.value == 0 else '' }}>{{ option.text }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button class="primary full" type="submit">保存</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+
+    <form class="search-form" method="get" action="{{ url_for('houses') }}">
+      {% if selected_community_id %}<input type="hidden" name="community" value="{{ selected_community_id }}">{% endif %}
+      {% if selected_building_id %}<input type="hidden" name="building" value="{{ selected_building_id }}">{% endif %}
+      <input name="keyword" value="{{ keyword or '' }}" placeholder="按房号搜索，例如 1栋101" maxlength="30">
+      <select name="status">
+        <option value="">全部状态</option>
+        {% for option in house_status_options %}
+        <option value="{{ option.value }}" {{ 'selected' if status_filter|string == option.value|string else '' }}>{{ option.text }}</option>
+        {% endfor %}
+      </select>
+      <button class="secondary" type="submit">搜索</button>
+    </form>
+
+    {% if houses %}
+    <div class="list scroll">
+      {% for item in houses %}
+      <div class="list-row">
+        <div class="list-main">
+          <b>{{ item.full_name }}</b>
+          <small>
+            {{ item.status_text }} · {% if item.area %}{{ item.area }} ㎡{% else %}面积未填{% endif %}
+            {% if item.residents %} · 在住：{{ item.residents|map(attribute='name')|join('、') }}{% else %} · 暂无在住人员{% endif %}
+          </small>
+        </div>
+        {% if can_edit %}
+        <details class="inline-editor">
+          <summary class="icon-link">编辑</summary>
+          <form method="post" action="{{ url_for('houses_command', entity='house', action='update') }}">
+            {{ csrf_field() }}
+            <input type="hidden" name="id" value="{{ item.id }}">
+            <label>单元<input name="unit" value="{{ item.unit or '' }}" maxlength="20"></label>
+            <label>房号<span class="label-req" title="必填">*</span><input name="room" value="{{ item.room }}" maxlength="20" required></label>
+            <label>面积（㎡）<input name="area" type="number" step="0.01" min="0" value="{{ item.area if item.area is not none else '' }}"></label>
+            <label>状态
+              <select name="status">
+                {% for option in house_status_options %}
+                <option value="{{ option.value }}" {{ 'selected' if item.status == option.value else '' }}>{{ option.text }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="primary full" type="submit">保存</button>
+          </form>
+        </details>
+        <form class="inline-form" method="post" action="{{ url_for('houses_command', entity='house', action='delete') }}" data-confirm="确定删除房屋「{{ item.full_name }}」吗？有在住关系时无法删除。">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <button class="text-danger" type="submit">删除</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% if pages > 1 %}
+    <nav class="pager">
+      {% if page > 1 %}<a class="secondary" href="{{ url_for('houses', community=selected_community_id or none, building=selected_building_id or none, keyword=keyword or none, status=status_filter or none, page=page-1) }}">上一页</a>{% endif %}
+      <span class="muted">第 {{ page }} / {{ pages }} 页，共 {{ total }} 套</span>
+      {% if page < pages %}<a class="secondary" href="{{ url_for('houses', community=selected_community_id or none, building=selected_building_id or none, keyword=keyword or none, status=status_filter or none, page=page+1) }}">下一页</a>{% endif %}
+    </nav>
+    {% endif %}
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🔍</span>
+      <span class="empty-text">没有符合条件的房屋。</span>
+      <span class="empty-hint">换个房号或状态试试。</span>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

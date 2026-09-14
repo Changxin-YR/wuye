@@ -1,0 +1,162 @@
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}人员与关系 · {{ app_name }}{% endblock %}
+{% block heading %}人员与关系{% endblock %}
+{% block content %}
+{% set persons = persons|default([]) %}
+{% set relations = relations|default([]) %}
+{% set houses = houses|default([]) %}
+{% set keyword = keyword|default('') %}
+{% set page = page|default(1) %}
+{% set pages = pages|default(1) %}
+{% set total = total|default(0) %}
+{% set relation_options = relation_options|default([]) %}
+<div class="grid-2 persons-grid">
+  <section class="panel">
+    <div class="panel-head">
+      <h3>人员档案</h3>
+      {% if can('person.write') %}
+      <details class="inline-editor">
+        <summary class="icon-link">＋ 新增人员</summary>
+        <form method="post" action="{{ url_for('persons_command', entity='person', action='create') }}">
+          {{ csrf_field() }}
+          <label>姓名<span class="label-req" title="必填">*</span><input name="name" maxlength="40" required></label>
+          <label>手机号<span class="label-req" title="必填">*</span><input name="phone" maxlength="20" required></label>
+          <button class="primary full" type="submit">保存</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    <form class="search-form" method="get" action="{{ url_for('persons') }}">
+      <input name="keyword" value="{{ keyword or '' }}" placeholder="按姓名或手机号搜索" maxlength="40">
+      <button class="secondary" type="submit">搜索</button>
+    </form>
+    {% if persons %}
+    <div class="list scroll">
+      {% for item in persons %}
+      <div class="list-row">
+        <div class="list-main">
+          <b>{{ item.name }}</b>
+          <small>
+            {{ item.phone }}
+            {% if item.username %} · 登录账号：{{ item.username }}{% if item.role_names %}（{{ item.role_names|join('、') }}）{% endif %}
+            {% else %} · 无登录账号{% endif %}
+          </small>
+          {% if item.houses %}
+          <span class="chips">
+            {% for relation in item.houses %}
+            <span class="chip">
+              {{ relation.full_name }}·{{ relation.relation_text }}{% if relation.status != 'active' %}（已结束）{% endif %}
+              {% if relation.status == 'active' and can('relation.write') %}
+              <form class="inline-form" method="post" action="{{ url_for('persons_command', entity='relation', action='end') }}" data-confirm="确定结束「{{ item.name }}」在 {{ relation.full_name }} 的{{ relation.relation_text }}关系吗？">
+                {{ csrf_field() }}
+                <input type="hidden" name="relation_id" value="{{ relation.relation_id }}">
+                <input type="hidden" name="reason" value="页面操作">
+                <button class="chip-x" type="submit" title="结束关系">×</button>
+              </form>
+              {% endif %}
+            </span>
+            {% endfor %}
+          </span>
+          {% else %}
+          <small class="muted">暂无房屋关系</small>
+          {% endif %}
+        </div>
+        {% if can('person.write') %}
+        <details class="inline-editor">
+          <summary class="icon-link">编辑</summary>
+          <form method="post" action="{{ url_for('persons_command', entity='person', action='update') }}">
+            {{ csrf_field() }}
+            <input type="hidden" name="id" value="{{ item.id }}">
+            <label>姓名<span class="label-req" title="必填">*</span><input name="name" value="{{ item.name }}" maxlength="40" required></label>
+            <label>手机号<span class="label-req" title="必填">*</span><input name="phone" value="{{ item.phone }}" maxlength="20" required></label>
+            <button class="primary full" type="submit">保存</button>
+          </form>
+        </details>
+        <form class="inline-form" method="post" action="{{ url_for('persons_command', entity='person', action='delete') }}" data-confirm="确定删除人员「{{ item.name }}」吗？还有有效的房屋关系时无法删除。">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <button class="text-danger" type="submit">删除</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% if pages > 1 %}
+    <nav class="pager">
+      {% if page > 1 %}<a class="secondary" href="{{ url_for('persons', keyword=keyword or none, page=page-1) }}">上一页</a>{% endif %}
+      <span class="muted">第 {{ page }} / {{ pages }} 页，共 {{ total }} 人</span>
+      {% if page < pages %}<a class="secondary" href="{{ url_for('persons', keyword=keyword or none, page=page+1) }}">下一页</a>{% endif %}
+    </nav>
+    {% endif %}
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">👤</span>
+      <span class="empty-text">没有找到人员。</span>
+      <span class="empty-hint">换个姓名或手机号试试。</span>
+    </div>
+    {% endif %}
+  </section>
+
+  <div class="stack">
+    {% if can('relation.write') %}
+    <section class="panel">
+      <div class="panel-head"><h3>登记房屋关系</h3></div>
+      <p class="muted">把一个人和一套房屋关联起来，同一房屋同一人只能有一条有效关系。</p>
+      <form class="form-grid" method="post" action="{{ url_for('persons_command', entity='relation', action='create') }}">
+        {{ csrf_field() }}
+        <label class="span-2">房屋
+          <span class="label-req" title="必填">*</span><select name="house_id" required>
+            <option value="">请选择房屋</option>
+            {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>人员
+          <span class="label-req" title="必填">*</span><select name="person_id" required>
+            <option value="">请选择人员</option>
+            {% for item in persons %}<option value="{{ item.id }}">{{ item.name }} {{ item.phone }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>关系
+          <select name="relation">
+            {% for option in relation_options %}<option value="{{ option.value }}">{{ option.text }}</option>{% endfor %}
+          </select>
+        </label>
+        <div class="form-actions span-2"><button class="primary" type="submit">登记关系</button></div>
+      </form>
+    </section>
+    {% endif %}
+
+    <section class="panel">
+      <div class="panel-head"><h3>在住关系</h3></div>
+      {% if relations %}
+      <div class="list scroll">
+        {% for relation in relations %}
+        <div class="list-row">
+          <div class="list-main">
+            <b>{{ relation.full_name }}</b>
+            <small>{{ relation.person_name }}{% if relation.person_phone %} {{ relation.person_phone }}{% endif %} · {{ relation.relation_text }} · {{ relation.status_text }}</small>
+          </div>
+          {% if relation.status == 'active' and can('relation.write') %}
+          <form class="inline-form" method="post" action="{{ url_for('persons_command', entity='relation', action='end') }}" data-confirm="确定结束 {{ relation.person_name }} 在 {{ relation.full_name }} 的关系吗？">
+            {{ csrf_field() }}
+            <input type="hidden" name="relation_id" value="{{ relation.id }}">
+            <input type="hidden" name="reason" value="页面操作">
+            <button class="text-danger" type="submit">结束</button>
+          </form>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🔗</span>
+      <span class="empty-text">暂无在住关系。</span>
+      <span class="empty-hint">在右侧「登记房屋关系」里绑定人员与房屋。</span>
+    </div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

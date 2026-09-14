@@ -1,1 +1,63 @@
-{% extends 'base.html' %}{% block heading %}新增报修{% endblock %}{% block content %}<section class="panel form-panel"><h3>提交维修需求</h3><p class="muted">室内问题请选择物业已绑定的房屋；公共区域问题请选择“公共设施”并填写具体位置。</p><form method="post" enctype="multipart/form-data" class="form-grid"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>报修标题<input name="title" maxlength="100" required placeholder="例如：厨房水龙头漏水"></label><label>工单类型<select name="type">{% for kind in order_types %}<option>{{ kind }}</option>{% endfor %}</select></label><label class="span-2">问题详情<textarea name="content" rows="5" maxlength="2000" required></textarea></label><label>关联房屋<select name="house_id"><option value="">公共区域 / 暂无绑定房屋</option>{% for house in houses %}<option value="{{ house.id }}">{{ house.building_name }} {{ house.unit }} {{ house.room_no }}</option>{% endfor %}</select></label><label>具体位置<input name="location" maxlength="200" required placeholder="如：A栋1单元101厨房 / 南门路灯"></label><label>联系人<input name="contact_name" maxlength="50" value="{{ current_user.real_name }}" required></label><label>联系电话<input name="contact_phone" maxlength="20" value="{{ current_user.phone }}" required></label><label class="span-2">问题照片（可选，单张≤5MB）<input type="file" name="image" accept="image/jpeg,image/png,image/webp"></label><div class="form-actions span-2"><a class="secondary" href="{{ url_for('orders') }}">返回</a><button class="primary">提交报修</button></div></form></section>{% endblock %}
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}报修 · {{ app_name }}{% endblock %}
+{% block heading %}报修{% endblock %}
+{% block content %}
+{% set houses = houses|default([]) %}
+{% set category_options = category_options|default([]) %}
+{% set urgency_options = urgency_options|default([]) %}
+{% set form = form|default({}) %}
+{% set errors = (errors if errors is mapping else {}) %}
+{% set error = error|default(none) %}
+<section class="panel form-panel">
+  <div class="panel-head">
+    <h3>填写报修信息</h3>
+    <a class="icon-link" href="{{ url_for('orders') }}">返回工单列表</a>
+  </div>
+  {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+  {% if not houses %}
+  <div class="flash flash-error">你名下暂时没有可以报修的房屋，请联系物业登记房屋关系后再来报修。</div>
+  {% endif %}
+  <form method="post" action="{{ url_for('order_create') }}">
+    {{ csrf_field() }}
+    <div class="form-grid">
+      <label class="span-2">报修房屋
+        <span class="label-req" title="必填">*</span><select name="house_id" class="{{ 'is-invalid' if errors.house_id else '' }}" required>
+          <option value="">请选择房屋</option>
+          {% for house in houses %}
+          <option value="{{ house.id }}" {{ 'selected' if form.house_id|string == house.id|string else '' }}>{{ house.full_name or house.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>联系人
+        <span class="label-req" title="必填">*</span><input name="contact_name" class="{{ 'is-invalid' if errors.contact_name else '' }}" value="{{ form.contact_name or '' }}" maxlength="40" required>
+      </label>
+      <label>联系电话
+        <span class="label-req" title="必填">*</span><input name="contact_phone" class="{{ 'is-invalid' if errors.contact_phone else '' }}" value="{{ form.contact_phone or '' }}" maxlength="20" required>
+      </label>
+      <label>报修类别
+        <span class="label-req" title="必填">*</span><select name="category" class="{{ 'is-invalid' if errors.category else '' }}" required>
+          {% for option in category_options %}
+          <option value="{{ option.value }}" {{ 'selected' if form.category == option.value else '' }}>{{ option.text }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>紧急程度
+        <select name="urgency">
+          {% for option in urgency_options %}
+          <option value="{{ option.value }}" {{ 'selected' if form.urgency|string == option.value|string else '' }}>{{ option.text }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="span-2">问题描述
+        <span class="label-req" title="必填">*</span><textarea name="description" class="{{ 'is-invalid' if errors.description else '' }}" rows="4" maxlength="1000" placeholder="例如：厨房水槽下面漏水，地面已经积水" required>{{ form.description or '' }}</textarea>
+      </label>
+    </div>
+    <div class="form-actions">
+      <a class="secondary" href="{{ url_for('orders') }}">取消</a>
+      <button class="primary" type="submit" {{ 'disabled' if not houses else '' }}>提交报修</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

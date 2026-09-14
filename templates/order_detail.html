@@ -1,7 +1,160 @@
-{% extends 'base.html' %}{% block heading %}工单详情{% endblock %}{% block content %}<a class="back-link" href="{{ url_for('orders') }}">← 返回工单列表</a><div class="detail-grid"><section class="panel"><div class="detail-title"><div><span class="eyebrow">{{ order.order_no }}</span><h2>{{ order.title }}</h2></div><span class="status status-{{ order.status }}">{{ status_text(order.status) }}</span></div><dl class="detail-fields"><div><dt>类型 / 提交时间</dt><dd>{{ order.type }} · {{ order.created_at|cn_time }}</dd></div><div><dt>报修业主</dt><dd>{{ owner.real_name or owner.username }}</dd></div><div><dt>房屋 / 具体位置</dt><dd>{% if house %}{{ house.building_name }} {{ house.unit }} {{ house.room_no }} · {% endif %}{{ order.location or '旧工单未填写，请联系业主核实' }}</dd></div><div><dt>联系人</dt><dd>{{ order.contact_name or owner.real_name or owner.username }} · {{ order.contact_phone or owner.phone or '未留电话' }}</dd></div><div><dt>维修人员</dt><dd>{{ (repairer.real_name or repairer.username) if repairer else '尚未指派' }}</dd></div><div><dt>问题详情</dt><dd class="multiline">{{ order.content }}</dd></div>{% if order.resolution %}<div><dt>完工说明</dt><dd class="multiline">{{ order.resolution }}</dd></div>{% endif %}</dl>{% if order.img_url %}<a href="{{ url_for('uploaded_file',filename=order.img_url.rsplit('/',1)[-1]) }}"><img class="order-photo" src="{{ url_for('uploaded_file',filename=order.img_url.rsplit('/',1)[-1]) }}" alt="报修照片"></a>{% endif %}<div class="actions">
-{% if current_user.role == 0 and order.status in [0,1] %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ order.version }}"><input type="hidden" name="action" value="{{ 'assign' if order.status == 0 else 'reassign' }}"><label>选择维修人员<select name="repairer_id" required><option value="">请选择</option>{% for r in repairers %}<option value="{{ r.id }}">{{ r.real_name or r.username }}（{{ r.username }}）</option>{% endfor %}</select></label><button class="primary">{{ '确认派单' if order.status == 0 else '确认改派' }}</button></form>{% endif %}
-{% if current_user.role == 1 and order.status == 1 %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ order.version }}"><input type="hidden" name="action" value="accept"><button class="primary">接单</button></form>{% endif %}
-{% if current_user.role == 1 and order.status == 2 %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ order.version }}"><input type="hidden" name="action" value="progress"><label>处理进度<textarea name="remark" maxlength="240" required></textarea></label><button class="secondary">保存进度</button></form><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ order.version }}"><input type="hidden" name="action" value="finish"><label>完工说明<textarea name="remark" maxlength="240" required placeholder="写明处理方法和结果"></textarea></label><button class="primary">提交完工，等待验收</button></form>{% endif %}
-{% if current_user.role in [0,2] and order.status in [0,1] %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ order.version }}"><input type="hidden" name="action" value="cancel"><label>取消原因<input name="remark" maxlength="240" required></label><button class="danger">取消工单</button></form>{% endif %}
-{% if current_user.role == 2 and order.status == 3 %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ order.version }}"><input type="hidden" name="action" value="close"><button class="primary">确认验收，关闭工单</button></form><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ order.version }}"><input type="hidden" name="action" value="reopen"><label>返修原因<textarea name="remark" maxlength="230" required></textarea></label><button class="secondary">要求返修</button></form>{% endif %}
-{% if current_user.role == 2 and order.status == 4 and not evaluation %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ order.version }}"><input type="hidden" name="action" value="evaluate"><label>服务评分<select name="score">{% for s in [5,4,3,2,1] %}<option value="{{ s }}">{{ s }}分</option>{% endfor %}</select></label><label>评价内容<input name="comment" maxlength="200"></label><button class="primary">提交评价</button></form>{% endif %}</div>{% if evaluation %}<section class="evaluation-result"><h3>业主评价 · {{ evaluation.score }}分</h3><p>{{ evaluation.comment or '未填写文字评价' }}</p><small>{{ evaluation.created_at|cn_time }}</small></section>{% endif %}</section><section class="panel"><h3>处理记录</h3><div class="timeline">{% for log in logs %}<div class="timeline-item"><i></i><div><b>{{ status_text(log.after_status) }}</b><p class="multiline">{{ log.remark }}</p><small>{{ log.operate_time|cn_time }} · 操作人 #{{ log.operator_id or '系统' }}</small></div></div>{% else %}<p class="empty">暂无处理记录</p>{% endfor %}</div></section></div>{% endblock %}
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}工单 {{ order.no }} · {{ app_name }}{% endblock %}
+{% block heading %}工单详情{% endblock %}
+{% block content %}
+{% set logs = logs|default([]) %}
+{% set actions = actions|default([]) %}
+{% set staff = staff|default([]) %}
+<div class="grid-2 detail-grid">
+  <div class="stack">
+    <section class="panel">
+      <a class="back-link" href="{{ url_for('orders') }}">← 返回工单列表</a>
+      <div class="detail-title">
+        <div>
+          <span class="eyebrow">{{ order.no }}</span>
+          <h2>{{ order.house_full }} · {{ order.category_text }}</h2>
+        </div>
+        <em class="status {{ status_cls(order.status_class) }}">{{ order.status_text }}</em>
+      </div>
+      <dl class="detail-fields">
+        <div><dt>问题描述</dt><dd>{{ order.description }}</dd></div>
+        <div class="detail-pair">
+          <div><dt>紧急程度</dt><dd>{{ order.urgency_text }}</dd></div>
+          <div><dt>报修时间</dt><dd>{{ order.created_at|cn_time }}</dd></div>
+        </div>
+        <div class="detail-pair">
+          <div><dt>联系人</dt><dd>{{ order.contact_name }} {{ order.contact_phone }}</dd></div>
+          <div><dt>报修人</dt><dd>{{ order.requester_name or order.owner_name or '—' }}</dd></div>
+        </div>
+        <div class="detail-pair">
+          <div><dt>维修师傅</dt><dd>{{ order.repairer_name or '尚未派单' }}</dd></div>
+          <div><dt>完工时间</dt><dd>{{ order.finished_at|cn_time }}</dd></div>
+        </div>
+        <div class="detail-pair">
+          <div><dt>关闭时间</dt><dd>{{ order.closed_at|cn_time }}</dd></div>
+          <div><dt>评价</dt><dd>{% if order.rating %}{{ order.rating }} 分{% if order.rating_note %} · {{ order.rating_note }}{% endif %}{% else %}未评价{% endif %}</dd></div>
+        </div>
+      </dl>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h3>处理过程</h3></div>
+      {% if logs %}
+      <div class="timeline">
+        {% for log in logs %}
+        <div class="timeline-item">
+          <i></i>
+          <div>
+            <b>{{ log.action_text or log.action }}</b>
+            <p>{{ log.from_status_text or '—' }} → {{ log.to_status_text or '—' }}{% if log.note %} · {{ log.note }}{% endif %}</p>
+            <small>{{ log.operator_name or '系统' }} · {{ log.created_at|cn_time }}</small>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🕒</span>
+      <span class="empty-text">还没有处理记录。</span>
+      <span class="empty-hint">处理动作会记录在这里。</span>
+    </div>
+      {% endif %}
+    </section>
+  </div>
+
+  <section class="panel actions-panel" id="actions">
+    <div class="panel-head">
+      <h3>可以做的操作</h3>
+      {% if actions %}<span class="panel-badge">{{ actions|length }} 项</span>{% endif %}
+    </div>
+    {% if actions %}
+    <div class="actions">
+      {% for action in actions %}
+      <form method="post" action="{{ action.target or url_for('order_command', order_id=order.id, action=action.name) }}"
+            {% if action.name == 'cancel' %}data-confirm="确定取消这张工单吗？取消后不能再派单。"{% endif %}>
+        {{ csrf_field() }}
+
+        {% if action.name == 'assign' %}
+          {% if staff %}
+          <label>派给维修师傅
+            <span class="label-req" title="必填">*</span><select name="repairer" required>
+              <option value="">请选择师傅</option>
+              {% for member in staff %}
+              <option value="{{ member.display_name or member.name }}">{{ member.display_name or member.name }}{% if member.open_orders %}（在处理 {{ member.open_orders }} 单）{% endif %}</option>
+              {% endfor %}
+            </select>
+          </label>
+          {% else %}
+          <label>维修师傅姓名
+            <span class="label-req" title="必填">*</span><input name="repairer" maxlength="40" placeholder="填写要派给的维修师傅姓名" required>
+          </label>
+          {% endif %}
+          <label>派单说明（可不填）
+            <input name="note" maxlength="200" placeholder="例如：这单比较急，今天上门">
+          </label>
+          <button class="primary" type="submit">{{ action.label or '派单' }}</button>
+
+        {% elif action.name == 'progress' %}
+        <label>记录一次处理进展
+          <span class="label-req" title="必填">*</span><textarea name="note" rows="3" maxlength="500" placeholder="例如：已更换角阀，正在等水泥凝固" required></textarea>
+        </label>
+        <button class="secondary" type="submit">{{ action.label or '登记进度' }}</button>
+
+        {% elif action.name == 'finish' %}
+        <label>完工说明（可不填）
+          <textarea name="note" rows="3" maxlength="500" placeholder="例如：已更换水龙头并试水正常"></textarea>
+        </label>
+        <button class="primary" type="submit">{{ action.label or '完工' }}</button>
+
+        {% elif action.name == 'verify' %}
+        <label>验收说明（可不填）
+          <input name="note" maxlength="200" placeholder="例如：现场确认不漏水">
+        </label>
+        <button class="primary" type="submit">{{ action.label or '验收通过' }}</button>
+
+        {% elif action.name == 'reopen' %}
+        <label>退回原因（必填）
+          <span class="label-req" title="必填">*</span><input name="note" maxlength="200" placeholder="例如：还是有点渗水，麻烦再看一下" required>
+        </label>
+        <button class="secondary" type="submit">{{ action.label or '返修' }}</button>
+
+        {% elif action.name == 'cancel' %}
+        <label>取消原因（必填）
+          <span class="label-req" title="必填">*</span><input name="reason" maxlength="200" placeholder="例如：住户说已经自己修好了" required>
+        </label>
+        <button class="danger" type="submit">{{ action.label or '取消工单' }}</button>
+
+        {% elif action.name == 'rate' %}
+        <label>满意度评价
+          <span class="label-req" title="必填">*</span><select name="rating" required>
+            {% for score in [5, 4, 3, 2, 1] %}
+            <option value="{{ score }}" {{ 'selected' if order.rating == score else '' }}>{{ score }} 分</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>评价说明（可不填）
+          <input name="note" maxlength="200" value="{{ order.rating_note or '' }}" placeholder="例如：师傅上门很快">
+        </label>
+        <button class="secondary" type="submit">{{ action.label or '评价' }}</button>
+
+        {% else %}
+        <label>{{ action.label or action.name }}{% if action.need_note %}说明（必填）{% else %}说明（可不填）{% endif %}
+          <input name="note" maxlength="200" {% if action.need_note %}required{% endif %}>
+        </label>
+        <button class="{% if action.style == 'primary' %}primary{% elif action.style == 'danger' %}danger{% else %}secondary{% endif %}" type="submit">{{ action.label or action.name }}</button>
+        {% endif %}
+      </form>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">👍</span>
+      <span class="empty-text">当前状态下你不需要做任何操作。</span>
+      <span class="empty-hint">有新进展时这里会出现可执行的操作。</span>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

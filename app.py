@@ -1,941 +1,839 @@
-import hashlib
-import io
-import json
-import os
-import re
-import secrets
-import time
-import uuid
-from datetime import timedelta
-from threading import BoundedSemaphore
-from functools import wraps
-from pathlib import Path
-from urllib.parse import urlsplit
+"""Flask 装配与页面路由（薄视图层）。
 
-from dotenv import load_dotenv
-from flask import Flask, Response, abort, flash, g, jsonify, make_response, redirect, render_template, request, send_from_directory, session, stream_with_context, url_for
-from PIL import Image, UnidentifiedImageError
-from sqlalchemy import func, or_, select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.orm.exc import StaleDataError
+职责边界：
+- 只做「收参数 → 调 services / queries → flash → redirect / render」，不含业务规则。
+- 授权一律交给 :class:`permissions.Policy`；``request.form`` 里的身份/范围一律不采信。
+- 事务边界由 ``db.init_app`` 的请求级会话负责。
+- ``/ai*`` 路由由 captain 的 ``agent.routes.ai_bp`` 蓝图提供（本模块只注册蓝图）。
+
+模板上下文契约（与 templates/*.html 实际读取的一致）：
+``app_name`` / ``current_user``(User 对象) / ``identity``(dict) / ``nav`` / ``csrf_token`` /
+``can(perm)`` / ``cn_time``(filter) / 各页面的业务变量（见各视图）。
+"""
+from __future__ import annotations
+
+import logging
+import os
+import secrets
+from datetime import datetime
+from typing import Any, Optional
+
+from flask import (
+    Flask,
+    abort,
+    current_app,
+    flash,
+    g,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+from sqlalchemy import select
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash
 
-from agent_tools import action_view, agent_request_key, available_commands, confirm, grant_actor, propose, structured_result
-from agent_state import load_messages, load_state, save_state
-from agent_planner import building_name_variants, plan_request
-from agent_security import R3, error_code_for, issue_agent_token, redact_provider_text, risk_for, safe_record
-from business import BusinessService
-from database import CONTRACT_REVISION, REVISION, make_engine, missing_schema
-from bootstrap import seed_catalog
-from database import environment
-from management import bp as management_bp
-from property_service import audit as domain_audit,snapshot as domain_snapshot
-from business_queries import _building_aliases, _unit_aliases, query as domain_query
-from permissions import Policy
-from dify_client import BailianClient, DeepSeekClient, DifyClient, DifyUnavailable, OpenAICompatibleAgentClient, _PLANNER_HINT, _TOOL_COMMANDS
-from models import AiAction, AiGrant, AiConversation, AuditLog, Base, Community, Evaluation, House, Notice, Notification, OrderLog, Person, SchemaMigration, User, WorkOrder, utcnow
-from services import InvalidTransition, ORDER_TYPES, ROLE_TEXT, STATUS_TEXT, can_access_order, log_order, notify, notify_admins, scope_orders, transition_status
+import config as app_config
+import db as app_db
+import models
+import permissions
+import queries
+import services
+from models import User
 
-PROJECT_ROOT=Path(__file__).resolve().parent
-load_dotenv(PROJECT_ROOT/'.env')
-AGENT_SYSTEM_PROMPT=(PROJECT_ROOT/'config'/'agent_system_prompt.md').read_text(encoding='utf-8')
+log = logging.getLogger(__name__)
 
+CSRF_FIELD = "csrf_token"
+SESSION_USER_ID = "user_id"
+SESSION_AUTH_VERSION = "auth_version"
 
-def _remember_business_selector(remembered, intent, values):
-    """Persist only user-visible selectors; never retain an optimistic version."""
-    values = dict(values or {})
-    specs = {
-        'complaint': ('resolved_complaint', ('complaint_id', 'id', 'title')),
-        'visitor': ('resolved_visitor', ('visitor_id', 'id', 'visitor_name', 'name', 'phone')),
-        'vehicle': ('resolved_vehicle', ('plate',)),
-        'parking': ('resolved_parking_space', ('space_code', 'plate')),
-        'parking_use': ('resolved_parking_use', ('space_code', 'plate')),
-        'device': ('resolved_device', ('device_code', 'code', 'name')),
-        'inspection': ('resolved_inspection', ('inspection_id', 'id', 'device_code')),
-        'payment': ('resolved_payment', ('payment_id', 'id', 'bill_id')),
-        'bill': ('resolved_bill', ('bill_id', 'id', 'period', 'month')),
-        'order': ('resolved_order', ('order_no',)),
-        'house': ('resolved_house', ('building_name', 'unit', 'room_no')),
-        'person': ('resolved_person', ('person_name', 'phone')),
-        'notice': ('resolved_notice', ('notice_id', 'id', 'title', 'community_id', 'building_id')),
-    }
-    domain = str(intent or '').split('.', 1)[0]
-    if intent == 'payment.record':
-        domain = 'bill'
-    key_spec = specs.get('parking_use' if intent == 'parking.release' else domain)
-    if not key_spec:
-        return
-    key, fields = key_spec
-    selector = {field: values.get(field) for field in fields if values.get(field) not in (None, '')}
-    if key == 'resolved_visitor' and selector.get('id') is not None:
-        selector = {'id': selector['id']}
-    if selector:
-        remembered[key] = selector
+#: 侧边导航：(active_key, endpoint, 标签, 需要的权限)
+NAV_ITEMS = [
+    {"key": "dashboard", "endpoint": "dashboard", "label": "工作台", "perm": None},
+    {"key": "houses", "endpoint": "houses", "label": "房屋", "perm": "house.read"},
+    {"key": "persons", "endpoint": "persons", "label": "人员", "perm": "person.read"},
+    {"key": "orders", "endpoint": "orders", "label": "工单", "perm": "order.read"},
+    {"key": "ai", "endpoint": ["ai.ai_page", "ai_page"], "label": "AI 助手", "perm": None},
+    {"key": "audit", "endpoint": "audit", "label": "操作记录", "perm": "audit.read"},
+]
+
+ERROR_TITLES = {400: "请求有误", 401: "请先登录", 403: "没有权限", 404: "找不到页面", 500: "系统开小差了"}
 
 
-def create_app(test_config=None):
-    app=Flask(__name__)
-    app.wsgi_app=ProxyFix(app.wsgi_app,x_prefix=1)
-    app.config.from_mapping(SECRET_KEY=os.getenv('SECRET_KEY',''),DATABASE_URL=os.getenv('DATABASE_URL',''),
-        UPLOAD_FOLDER=os.getenv('UPLOAD_FOLDER','uploads'),MAX_CONTENT_LENGTH=8*1024*1024,
-        SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',
-        SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE','0')=='1',PERMANENT_SESSION_LIFETIME=timedelta(hours=4),
-        AI_PROVIDER=os.getenv('AI_PROVIDER','bailian'),
-        BAILIAN_BASE_URL=os.getenv('BAILIAN_BASE_URL','https://dashscope.aliyuncs.com/compatible-mode/v1'),
-        BAILIAN_API_KEY=os.getenv('BAILIAN_API_KEY') or os.getenv('DASHSCOPE_API_KEY',''),BAILIAN_MODEL=os.getenv('BAILIAN_MODEL','qwen-plus'),
-        DEEPSEEK_BASE_URL=os.getenv('DEEPSEEK_BASE_URL','https://api.deepseek.com'),
-        DEEPSEEK_API_KEY=os.getenv('DEEPSEEK_API_KEY') or os.getenv('DEEPSEEK_KEY',''),DEEPSEEK_MODEL=os.getenv('DEEPSEEK_MODEL','deepseek-v4-pro'),
-        DIFY_BASE_URL=os.getenv('DIFY_BASE_URL','http://127.0.0.1/v1'),DIFY_API_KEY=os.getenv('DIFY_API_KEY',''),
-        DIFY_TIMEOUT=int(os.getenv('DIFY_TIMEOUT','60')),APP_ENV=os.getenv('APP_ENV','production'))
-    if test_config:app.config.update(test_config)
-    if not app.testing and app.config['APP_ENV']=='production' and not app.config['SESSION_COOKIE_SECURE'] and (('APP_ENV' in (test_config or {})) or os.getenv('COOKIE_SECURE') is not None):
-        raise RuntimeError('生产环境必须启用 Secure Cookie（COOKIE_SECURE=1）')
-    if not app.testing and (len(app.config['SECRET_KEY'])<32 or app.config['SECRET_KEY'].startswith('replace-')):
-        raise RuntimeError('请配置至少32位随机SECRET_KEY，参见README')
-    if not app.config['DATABASE_URL']:raise RuntimeError('请配置DATABASE_URL，参见README')
-    engine=make_engine(app.config['DATABASE_URL'])
-    if app.testing:
-        Base.metadata.create_all(engine)
-        with engine.begin() as conn:
-            seed_catalog(conn);environment(conn,'test')
-            for revision in (REVISION,CONTRACT_REVISION):
-                if not conn.execute(select(SchemaMigration.revision).where(SchemaMigration.revision==revision)).first():
-                    conn.execute(SchemaMigration.__table__.insert().values(revision=revision,applied_at=utcnow()))
-        app.config['APP_ENV']='test'
-    elif missing_schema(engine):
-        engine.dispose()
-        raise RuntimeError('数据库尚未初始化或需要升级，请运行python manage.py init-db或upgrade-db')
-    if not app.testing:
-        with engine.begin() as conn:environment(conn,app.config['APP_ENV'])
-    ai_slots=BoundedSemaphore(2)
-    app.register_blueprint(management_bp)
-    factory=sessionmaker(bind=engine,expire_on_commit=False,class_=Session)
-    legacy_dify = bool(test_config and ('DIFY_BASE_URL' in test_config or 'DIFY_API_KEY' in test_config) and 'AI_PROVIDER' not in test_config)
-    if app.config['AI_PROVIDER']=='dify' or legacy_dify:
-        ai_client=DifyClient(app.config['DIFY_BASE_URL'],app.config['DIFY_API_KEY'],app.config['DIFY_TIMEOUT'])
-    elif str(app.config['AI_PROVIDER']).lower()=='deepseek':
-        ai_client=DeepSeekClient(app.config['DEEPSEEK_BASE_URL'],app.config['DEEPSEEK_API_KEY'],app.config['DEEPSEEK_MODEL'],app.config['DIFY_TIMEOUT'])
-    else:
-        ai_client=BailianClient(app.config['BAILIAN_BASE_URL'],app.config['BAILIAN_API_KEY'],app.config['BAILIAN_MODEL'],app.config['DIFY_TIMEOUT'])
-    app.extensions.update(db_engine=engine,db_session=factory,dify=ai_client,ai=ai_client)
-    folder=Path(app.config['UPLOAD_FOLDER'])
-    if not folder.is_absolute():folder=PROJECT_ROOT/folder
-    folder.mkdir(parents=True,exist_ok=True);app.config['UPLOAD_FOLDER']=str(folder)
+# --------------------------------------------------------------------------
+# 小工具
+# --------------------------------------------------------------------------
+class Row(dict):
+    """模板里既能 ``item.key`` 也能 ``item['key']``（Jinja 对 dict 的 getattr 优先走方法名）。"""
 
-    def wants_json():return request.path.startswith('/ai/') or request.path in {'/health','/ready'} or request.path.startswith('/api/')
-
-    def error_response(message,status,code=None):
-        if wants_json():return make_response(jsonify(error=message,code=code or error_code_for(status,str(message))),status)
-        return make_response(render_template('error.html',message=message,status=status),status)
-
-    @app.before_request
-    def begin():
-        g.db=factory();g.new_files=[];g.user=None;g.trace_id=uuid.uuid4().hex
-        uid=session.get('user_id')
-        if uid:
-            user=g.db.get(User,uid)
-            if user and user.active and user.role in ROLE_TEXT and session.get('auth_version')==user.auth_version:g.user=user
-            else:session.clear()
-        if 'csrf_token' not in session:session['csrf_token']=secrets.token_urlsafe(32)
-        if (request.path.startswith('/ai/') or (request.path.startswith('/api/') and request.path!='/api/agent/tools')) and not g.user:return jsonify(error='登录已失效，请重新登录。'),401
-        if request.method in {'POST','PUT','PATCH','DELETE'} and request.path!='/api/agent/tools':
-            token=request.form.get('csrf_token') or request.headers.get('X-CSRF-Token')
-            if not isinstance(token,str) or not secrets.compare_digest(token,session['csrf_token']):abort(400,description='页面验证已过期，请刷新后重试')
-
-    @app.after_request
-    def finalize(response):
-        db=g.get('db');failed=response.status_code>=400
+    def __getattr__(self, name: str) -> Any:
         try:
-            if db:
-                if request.method in {'POST','PUT','PATCH','DELETE'} and not failed:db.commit()
-                else:db.rollback()
-        except (StaleDataError,IntegrityError):
-            db.rollback();failed=True
-            session['_flashes']=[x for x in session.get('_flashes',[]) if x[0]!='success']
-            response=error_response('数据已更新或存在重复记录，请刷新后重试。',409)
-        except SQLAlchemyError:
-            db.rollback();failed=True
-            session['_flashes']=[x for x in session.get('_flashes',[]) if x[0]!='success']
-            app.logger.error('database_transaction_failed')
-            response=error_response('数据保存失败，请稍后重试。',503)
-        if failed:
-            for name in g.get('new_files',[]):(folder/name).unlink(missing_ok=True)
-        response.headers['X-Request-ID']=g.get('trace_id','')
-        if failed and g.get('user') and request.method in {'POST','PUT','PATCH','DELETE'}:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+
+def cn_time(value: Any) -> str:
+    """模板过滤器：``YYYY-MM-DD HH:MM:SS`` → ``YYYY-MM-DD HH:MM``；空值 ``—``。"""
+    if value in (None, ""):
+        return "—"
+    if isinstance(value, str):
+        text = value.strip().replace("T", " ")
+        if not text:
+            return "—"
+        return text[:16] if len(text) >= 16 else text
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M")
+    return str(value)
+
+
+def _int_arg(name: str) -> Optional[int]:
+    text = (request.args.get(name) or "").strip()
+    if text.lstrip("-").isdigit():
+        return int(text)
+    return None
+
+
+def _text(value: Any) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _csrf_token() -> str:
+    token = session.get(CSRF_FIELD)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_FIELD] = token
+    return token
+
+
+def check_csrf() -> None:
+    """POST 一律校验 CSRF（表单隐藏域或 X-CSRF-Token 头）。"""
+    sent = _text(request.form.get(CSRF_FIELD)) or _text(request.headers.get("X-CSRF-Token"))
+    token = session.get(CSRF_FIELD) or ""
+    if not sent or not token or not secrets.compare_digest(sent, token):
+        abort(400, description="页面已过期，请刷新后重新提交")
+
+
+def _db():
+    return app_db.get_session()
+
+
+def current_policy(source: str = "web") -> permissions.Policy:
+    """当前请求的 Policy（未登录时是匿名 Policy）。"""
+    policy = getattr(g, "policy", None)
+    if policy is None:
+        policy = permissions.Policy(_db(), session.get(SESSION_USER_ID), source=source)
+        g.policy = policy
+    return policy
+
+
+def _login_required() -> None:
+    if not session.get(SESSION_USER_ID):
+        abort(401, description="请先登录后再操作")
+
+
+def wants_json() -> bool:
+    return request.path.startswith("/ai/") or request.accept_mimetypes.best == "application/json"
+
+
+def _safe_next(target: Any, fallback: str) -> str:
+    text = _text(target)
+    if text.startswith("/") and not text.startswith("//"):
+        script_root = (request.script_root or "").rstrip("/")
+        if script_root and text != script_root and not text.startswith(script_root + "/"):
+            return script_root + text
+        return text
+    return fallback
+
+
+def build_nav(policy: permissions.Policy) -> list[Row]:
+    """按权限过滤导航项：元素 ``{key, label, href}``（base.html 用 request.endpoint 判高亮）。"""
+    items: list[Row] = []
+    entries = list(NAV_ITEMS)
+    # 运营模块（投诉/访客/车辆车位/设备巡检/收费）与租赁页的入口由 platform 的模块提供，
+    # 未加载时不渲染（避免坏链接）。
+    try:
+        from ops_routes import OPS_NAV_ITEMS  # type: ignore
+
+        entries.extend(OPS_NAV_ITEMS)
+    except Exception:  # pragma: no cover
+        pass
+    entries.append({"key": "leases", "endpoint": "leases", "label": "租赁", "perm": "lease.write"})
+    for item in entries:
+        if item["perm"] and not policy.has(item["perm"]):
+            continue
+        # endpoint 可以是字符串或候选列表（如 AI 项：蓝图端点优先、app 级回退）
+        candidates = item["endpoint"]
+        if isinstance(candidates, str):
+            candidates = [candidates]
+        href = None
+        for endpoint in candidates:
             try:
-                with factory() as log_db:
-                    actor=log_db.get(User,g.user.id)
-                    if actor:domain_audit(log_db,actor,request.path[:50],request.path[:100],source='agent' if request.path=='/api/agent/tools' else 'manual',trace_id=g.get('trace_id'),status='failure',error=(response.get_json(silent=True) or {}).get('error','操作未成功'))
-                    log_db.commit()
-            except SQLAlchemyError:app.logger.error('audit_write_failed trace=%s',g.get('trace_id'))
-        response.headers['X-Content-Type-Options']='nosniff'
-        response.headers['X-Frame-Options']='DENY'
-        response.headers['Referrer-Policy']='same-origin'
-        response.headers['Content-Security-Policy']="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-        if app.config.get('APP_ENV')=='production' and app.config.get('SESSION_COOKIE_SECURE'):
-            response.headers['Strict-Transport-Security']='max-age=31536000; includeSubDomains'
-        if request.path.startswith('/static/') and request.path.endswith('.js'):
-            response.headers['Content-Type']='application/javascript; charset=utf-8'
-        if not request.path.startswith('/static/'):response.headers['Cache-Control']='no-store'
-        return response
+                href = url_for(endpoint)
+                break
+            except Exception:  # 蓝图/模块未加载时不渲染坏链接
+                continue
+        if href is None:
+            continue
+        items.append(Row({"key": item["key"], "label": item["label"], "href": href}))
+    return items
 
-    @app.teardown_request
-    def end(error=None):
-        db=g.pop('db',None)
-        if db:db.rollback();db.close()
 
-    @app.errorhandler(HTTPException)
-    def http_error(exc):
-        messages={401:'请先登录',403:'你没有权限执行此操作',404:'内容不存在或当前不可访问',413:'文件或请求过大'}
-        shown=messages.get(exc.code,exc.description)
-        basis=str(exc.description or shown)
-        return error_response(shown,exc.code,error_code_for(exc.code,basis))
+def page_of(result: dict) -> dict:
+    """分页信息：queries 给 ``pages``，模板也用 ``pages``。"""
+    return {
+        "page": result.get("page", 1),
+        "page_size": result.get("page_size", 20),
+        "pages": result.get("pages", 1),
+        "total": result.get("total", 0),
+        "has_prev": result.get("has_prev", False),
+        "has_next": result.get("has_next", False),
+    }
 
-    @app.errorhandler(InvalidTransition)
-    def transition_error(exc):return error_response(str(exc),409)
 
-    @app.errorhandler(IntegrityError)
-    @app.errorhandler(StaleDataError)
-    def conflict_error(exc):
-        g.db.rollback();return error_response('数据已变化或存在重复记录，请刷新后重试。',409)
+# --------------------------------------------------------------------------
+# 视图
+# --------------------------------------------------------------------------
+def view_login():
+    """登录：哈希校验 + CSRF；成功后把 user_id / auth_version 写进 session。"""
+    next_url = _text(request.values.get("next"))
+    policy = current_policy()
+    if request.method == "POST":
+        check_csrf()
+        username = _text(request.form.get("username"))
+        password = request.form.get("password") or ""
+        user = _db().execute(
+            select(User).where(User.username == username, User.deleted.is_(False))
+        ).scalars().first()
+        if user is None or not user.active or not check_password_hash(user.password_hash or "", password):
+            log.info("登录失败：%s", username)
+            return render_template("login.html", error="用户名或密码不正确", next=next_url, username=username)
+        session.clear()
+        session[SESSION_USER_ID] = user.id
+        session[SESSION_AUTH_VERSION] = int(user.auth_version)
+        session.permanent = True
+        session[CSRF_FIELD] = secrets.token_urlsafe(32)
+        flash(f"欢迎回来，{user.real_name or user.username}", "success")
+        return redirect(_safe_next(next_url, url_for("dashboard")))
+    if policy.user is not None:
+        return redirect(_safe_next(next_url, url_for("dashboard")))
+    return render_template("login.html", error=None, next=next_url, username="")
 
-    @app.errorhandler(SQLAlchemyError)
-    def db_error(exc):
-        g.db.rollback();app.logger.error('database_request_failed');return error_response('数据库暂时不可用。',503)
+
+def view_logout():
+    """退出登录（POST + CSRF）。"""
+    check_csrf()
+    session.clear()
+    return redirect(url_for("login"))
+
+
+def view_health():
+    """健康检查：数据库可连返回 200。"""
+    ok = app_db.ping()
+    return {"status": "ok" if ok else "degraded", "database": ok, "app_env": current_app.config.get("APP_ENV")}, (
+        200 if ok else 503
+    )
+
+
+def view_dashboard():
+    """工作台：6 个状态卡 + 最近工单 + 身份卡。"""
+    _login_required()
+    data = queries.dashboard(current_policy())
+    return render_template(
+        "dashboard.html",
+        identity=data["identity"],
+        status_counts=[Row({"status": c["status"], "text": c["text"], "count": c["count"], "class": c["class"]}) for c in data["status_counts"]],
+        recent_orders=[Row(item) for item in data["recent_orders"]],
+        my_stats=Row(data["my_stats"]),
+    )
+
+
+def view_houses():
+    """房屋：小区 → 楼栋 → 房屋 三级联动。"""
+    _login_required()
+    policy = current_policy()
+    policy.require("house.read")
+    community_id = _int_arg("community")
+    building_id = _int_arg("building")
+    keyword = _text(request.args.get("keyword"))
+    status_filter = _text(request.args.get("status"))
+    page = _int_arg("page") or 1
+
+    communities = queries.list_communities(policy, page_size=100)["items"]
+    buildings = (
+        queries.list_buildings(policy, community_id=community_id, page_size=200)["items"] if community_id else []
+    )
+    data = (
+        queries.list_houses(
+            policy, building=building_id, keyword=keyword or None, status=status_filter or None, page=page, page_size=50
+        )
+        if building_id
+        else {"items": [], "total": 0, "page": 1, "pages": 1}
+    )
+    return render_template(
+        "houses.html",
+        communities=[Row(item) for item in communities],
+        buildings=[Row(item) for item in buildings],
+        houses=[Row(item) for item in data["items"]],
+        selected_community_id=community_id,
+        selected_building_id=building_id,
+        keyword=keyword,
+        status_filter=status_filter,
+        house_status_options=queries.options_meta()["house_status"],
+        can_edit=policy.has("house.write"),
+        **page_of(data),
+    )
+
+
+def view_houses_post(entity: str, action: str):
+    """``/houses/<entity>/<action>``：小区 / 楼栋 / 房屋 的增删改。"""
+    check_csrf()
+    policy = current_policy()
+    form = request.form
+    try:
+        if entity == "community":
+            policy.require("community.write")
+            if action == "create":
+                services.create_community(policy, name=form.get("name"), address=form.get("address"))
+            elif action == "update":
+                services.update_community(
+                    policy, community_id=form.get("id"), name=form.get("name"), address=form.get("address")
+                )
+            elif action == "delete":
+                services.delete_community(policy, community_id=form.get("id"))
+            else:
+                abort(404)
+        elif entity == "building":
+            policy.require("community.write")
+            if action == "create":
+                services.create_building(policy, community_id=form.get("community_id"), name=form.get("name"))
+            elif action == "update":
+                services.update_building(policy, building_id=form.get("id"), name=form.get("name"))
+            elif action == "delete":
+                services.delete_building(policy, building_id=form.get("id"))
+            else:
+                abort(404)
+        elif entity == "house":
+            policy.require("house.write")
+            if action == "create":
+                services.create_house(
+                    policy,
+                    building_id=form.get("building_id"),
+                    unit=form.get("unit"),
+                    room=form.get("room"),
+                    area=form.get("area"),
+                    status=form.get("status") or 0,
+                )
+            elif action == "update":
+                services.update_house(
+                    policy,
+                    house_id=form.get("id"),
+                    unit=form.get("unit"),
+                    room=form.get("room"),
+                    area=form.get("area"),
+                    status=form.get("status"),
+                )
+            elif action == "delete":
+                services.delete_house(policy, house_id=form.get("id"))
+            else:
+                abort(404)
+        else:
+            abort(404)
+    except services.ServiceError as exc:
+        _db().rollback()
+        flash(exc.message, "error")
+        return redirect(request.referrer or url_for("houses"))
+    flash("操作成功", "success")
+    return redirect(request.referrer or url_for("houses"))
+
+
+def view_persons():
+    """人员：档案列表 + 有效关系列表（关系登记/结束的表单在同一页）。"""
+    _login_required()
+    policy = current_policy()
+    policy.require("person.read")
+    keyword = _text(request.args.get("keyword"))
+    page = _int_arg("page") or 1
+
+    data = queries.list_persons(policy, keyword=keyword or None, page=page, page_size=20)
+    relations = queries.list_relations(policy, page=1, page_size=50)["items"]
+    houses = queries.list_houses(policy, page_size=200)["items"] if policy.has("relation.write") else []
+    return render_template(
+        "persons.html",
+        persons=[Row(item) for item in data["items"]],
+        relations=[Row(item) for item in relations],
+        houses=[Row({"id": h["id"], "label": h["full_name"], "full_name": h["full_name"]}) for h in houses],
+        relation_options=queries.options_meta()["relations"],
+        keyword=keyword,
+        **page_of(data),
+    )
+
+
+def view_persons_post(entity: str, action: str):
+    """``/persons/<entity>/<action>``：人员档案与房屋关系。"""
+    check_csrf()
+    policy = current_policy()
+    form = request.form
+    try:
+        if entity == "person":
+            policy.require("person.write")
+            if action == "create":
+                services.create_person(policy, name=form.get("name"), phone=form.get("phone"))
+            elif action == "update":
+                services.update_person(policy, person_id=form.get("id"), name=form.get("name"), phone=form.get("phone"))
+            elif action == "delete":
+                services.delete_person(policy, person_id=form.get("id"))
+            else:
+                abort(404)
+        elif entity == "relation":
+            policy.require("relation.write")
+            if action == "create":
+                services.bind_relation(
+                    policy, house_id=form.get("house_id"), person_id=form.get("person_id"), relation=form.get("relation")
+                )
+            elif action == "end":
+                services.end_relation(policy, relation_id=form.get("relation_id") or form.get("id"), reason=form.get("reason"))
+            else:
+                abort(404)
+        else:
+            abort(404)
+    except services.ServiceError as exc:
+        _db().rollback()
+        flash(exc.message, "error")
+        return redirect(request.referrer or url_for("persons"))
+    flash("操作成功", "success")
+    return redirect(request.referrer or url_for("persons"))
+
+
+def view_orders():
+    """工单列表：状态页签 + 关键词 + 只看我的 + 分页。"""
+    _login_required()
+    policy = current_policy()
+    policy.require("order.read")
+    status_filter = _text(request.args.get("status"))
+    keyword = _text(request.args.get("keyword"))
+    mine = _text(request.args.get("mine"))
+    page = _int_arg("page") or 1
+
+    data = queries.list_work_orders(
+        policy,
+        status=status_filter or None,
+        keyword=keyword or None,
+        mine=bool(mine),
+        page=page,
+        page_size=20,
+    )
+    counts = queries.order_status_summary(policy)
+    return render_template(
+        "orders.html",
+        orders=[Row(item) for item in data["items"]],
+        status_counts=[Row({"status": c["status"], "text": c["text"], "count": c["count"], "class": c["class"]}) for c in queries.status_counts(policy, counts)],
+        status_filter=status_filter,
+        keyword=keyword,
+        mine=mine,
+        community=_text(request.args.get("community")),
+        **page_of(data),
+    )
+
+
+def view_order_new():
+    """报修表单。"""
+    _login_required()
+    policy = current_policy()
+    policy.require("order.create")
+    options = queries.options_meta()
+    return render_template(
+        "order_form.html",
+        houses=[Row({"id": h["id"], "full_name": h["full_name"], "label": h["full_name"]}) for h in queries.list_houses(policy, page_size=200)["items"]],
+        category_options=options["categories"],
+        urgency_options=options["urgencies"],
+        form=Row({}),
+        error=None,
+    )
+
+
+def view_order_create():
+    """提交报修；失败时把中文错误回填到表单。"""
+    check_csrf()
+    policy = current_policy()
+    form = request.form
+    try:
+        result = services.create_work_order(
+            policy,
+            house_id=form.get("house_id"),
+            contact_name=form.get("contact_name"),
+            contact_phone=form.get("contact_phone"),
+            category=form.get("category"),
+            description=form.get("description"),
+            urgency=form.get("urgency") or 0,
+        )
+    except services.ServiceError as exc:
+        _db().rollback()
+        options = queries.options_meta()
+        return (
+            render_template(
+                "order_form.html",
+                houses=[Row({"id": h["id"], "full_name": h["full_name"], "label": h["full_name"]}) for h in queries.list_houses(policy, page_size=200)["items"]],
+                category_options=options["categories"],
+                urgency_options=options["urgencies"],
+                form=Row(dict(form)),
+                error=exc.message,
+            ),
+            400,
+        )
+    flash(result.get("message") or "报修已登记", "success")
+    order_id = result.get("id") or result.get("order_id")
+    return redirect(url_for("order_detail", order_id=order_id) if order_id else url_for("orders"))
+
+
+def view_order_detail(order_id: int):
+    """工单详情：流转时间线 + 后端算好的可执行操作 + 派单候选人。"""
+    _login_required()
+    policy = current_policy()
+    policy.require("order.read")
+    order = queries.get_work_order(policy, order_id)
+    actions = order.get("actions") or []
+    staff = []
+    if any(item["name"] == "assign" for item in actions) and policy.has("staff.read"):
+        staff = queries.list_staff(policy, role="engineer", page_size=50)["items"]
+    return render_template(
+        "order_detail.html",
+        order=Row(order),
+        logs=[Row(item) for item in (order.get("logs") or [])],
+        actions=[Row(item) for item in actions],
+        staff=[Row(item) for item in staff],
+    )
+
+
+def view_order_action(order_id: int, action: str):
+    """工单动作：状态名严格限定在契约清单内。"""
+    check_csrf()
+    policy = current_policy()
+    form = request.form
+    try:
+        if action == "assign":
+            services.assign_work_order(policy, order_id, repairer=form.get("repairer"), note=_text(form.get("note")))
+        elif action == "accept":
+            services.accept_work_order(policy, order_id, note=_text(form.get("note")))
+        elif action == "progress":
+            services.add_order_progress(policy, order_id, note=form.get("note"))
+        elif action == "finish":
+            services.finish_work_order(policy, order_id, note=_text(form.get("note")))
+        elif action == "verify":
+            services.verify_work_order(policy, order_id, note=_text(form.get("note")))
+        elif action == "reopen":
+            # 验收不通过 → 退回返修（待验收 → 维修中）。模板早就渲染了这个按钮，
+            # 但这里一直没接分支，点下去就是 404。
+            services.reopen_work_order(policy, order_id, reason=_text(form.get("note")))
+        elif action == "cancel":
+            services.cancel_work_order(policy, order_id, reason=form.get("reason"))
+        elif action == "rate":
+            services.rate_work_order(policy, order_id, rating=form.get("rating"), note=_text(form.get("note")))
+        else:
+            abort(404)
+    except services.ServiceError as exc:
+        _db().rollback()
+        flash(exc.message, "error")
+        return redirect(url_for("order_detail", order_id=order_id))
+    flash("操作成功", "success")
+    return redirect(url_for("order_detail", order_id=order_id))
+
+
+def view_audit():
+    """操作审计：页面操作与 AI 助手同表，可按来源筛选。"""
+    _login_required()
+    policy = current_policy()
+    policy.require("audit.read")
+    source_filter = _text(request.args.get("source"))
+    keyword = _text(request.args.get("keyword"))
+    page = _int_arg("page") or 1
+    data = queries.list_audit_logs(
+        policy, keyword=keyword or None, source=source_filter or None, page=page, page_size=20
+    )
+    return render_template(
+        "audit.html",
+        logs=[Row(item) for item in data["items"]],
+        source_filter=source_filter,
+        keyword=keyword,
+        **page_of(data),
+    )
+
+
+# --------------------------------------------------------------------------
+# 装配
+# --------------------------------------------------------------------------
+def register_jinja(app: Flask) -> None:
+    """Jinja 过滤器 + 全局函数 + 每页上下文（模板实际读取的键）。"""
+    app.jinja_env.filters["cn_time"] = cn_time
 
     @app.context_processor
-    def helpers():
-        unread=0
-        if g.get('user'):
-            try:unread=g.db.scalar(select(func.count(Notification.id)).where(Notification.user_id==g.user.id,Notification.is_read.is_(False))) or 0
-            except SQLAlchemyError:g.db.rollback();unread=0
-        return {'current_user':g.get('user'),'status_text':STATUS_TEXT.get,'role_text':ROLE_TEXT.get,
-                'csrf_token':session.get('csrf_token',''),'unread_count':unread,'order_types':sorted(ORDER_TYPES)}
-
-    @app.template_filter('cn_time')
-    def cn_time(value):return (value+timedelta(hours=8)).strftime('%Y-%m-%d %H:%M') if value else '—'
-
-    def login_required(view):
-        @wraps(view)
-        def wrapped(*args,**kwargs):
-            if not g.user:
-                if wants_json():return jsonify(error='请重新登录'),401
-                return redirect(url_for('login',next=request.path))
-            return view(*args,**kwargs)
-        return wrapped
-
-    def role_required(*roles):
-        def decorator(view):
-            @wraps(view)
-            @login_required
-            def wrapped(*args,**kwargs):
-                if g.user.role not in roles or (roles==(0,) and not Policy(g.db,g.user).super):abort(403)
-                return view(*args,**kwargs)
-            return wrapped
-        return decorator
-
-    def field(name,maxlen,required=False,values=None):
-        value=request.form.get(name,'').strip()
-        if (required and not value) or len(value)>maxlen:abort(400,description=f'{name}不能为空或超过{maxlen}字')
-        if values is not None and value not in values:abort(400,description='请选择有效的'+name)
-        return value
-
-    def number(name,minimum=1):
-        raw=request.form.get(name,'')
-        if not raw.isascii() or not raw.isdigit() or len(raw)>10 or int(raw)<minimum:abort(400,description='数字参数无效: '+name)
-        return int(raw)
-
-    def phone(value):
-        if not re.fullmatch(r'[0-9+() -]{6,20}',value):abort(400,description='请填写有效联系电话')
-        return value
-
-    def password(value):
-        if not isinstance(value,str) or not 8<=len(value)<=128:abort(400,description='新密码长度须为8—128位')
-        return value
-
-    def versioned(obj):
-        if number('version')!=obj.version:abort(409,description='记录已被更新，请刷新后再操作')
-
-    def audit(action,target,detail=''):
-        domain_audit(g.db,g.user,action,target,g.get('profile_before'),domain_snapshot(g.user) if action=='profile_update' else {'detail':detail},source='agent' if request.path.startswith('/ai/actions/') else 'manual',trace_id=g.trace_id,obj=g.user if action=='profile_update' else None)
-
-    def paginate(query,per_page=20):
-        raw=request.args.get('page','1')
-        if not raw.isascii() or not raw.isdigit() or len(raw)>6 or int(raw)<1:abort(400,description='页码无效')
-        page=int(raw);total=g.db.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
-        return list(g.db.scalars(query.limit(per_page).offset((page-1)*per_page))),page,total
-
-    def save_image(upload):
-        if not upload or not upload.filename:return ''
-        raw=upload.read(5*1024*1024+1)
-        if len(raw)>5*1024*1024:abort(413,description='图片不得超过5MB')
+    def inject_globals():  # pragma: no cover - 由 Flask 调用
         try:
-            with Image.open(io.BytesIO(raw)) as im:
-                if im.format not in {'JPEG','PNG','WEBP'} or im.width*im.height>20_000_000:raise ValueError()
-                im.verify()
-            with Image.open(io.BytesIO(raw)) as im:
-                im=im.convert('RGB');im.thumbnail((1800,1800));name=uuid.uuid4().hex+'.jpg';im.save(folder/name,'JPEG',quality=88)
-        except (UnidentifiedImageError,OSError,ValueError,Image.DecompressionBombError):abort(400,description='请上传真实的JPEG、PNG或WebP图片')
-        g.new_files.append(name);return name
+            policy = current_policy()
+            user = policy.user
+            identity = policy.identity()
+            return {
+                "app_name": app.config.get("APP_NAME", "美家物业"),
+                "current_user": user,
+                "identity": Row(identity) if user else None,
+                "nav": build_nav(policy) if user else [],
+                "csrf_token": _csrf_token(),
+                "can": policy.has,
+                "now": datetime.now(),
+            }
+        except Exception:  # 数据库不可用时也要能渲染错误页
+            log.warning("渲染上下文失败", exc_info=True)
+            return {
+                "app_name": app.config.get("APP_NAME", "美家物业"),
+                "current_user": None,
+                "identity": None,
+                "nav": [],
+                "csrf_token": session.get(CSRF_FIELD) or "",
+                "can": lambda *_: False,
+                "now": datetime.now(),
+            }
 
-    def get_order(order_no,lock=False):
-        q=select(WorkOrder).where(WorkOrder.order_no==order_no)
-        if lock:q=q.with_for_update()
-        order=g.db.scalar(q)
-        if not order:abort(404)
-        if not can_access_order(g.user,order):abort(403)
-        return order
 
-    @app.get('/')
-    def index():return redirect(url_for('dashboard' if g.user else 'login'))
+def load_agent_settings(application: "Flask") -> None:
+    """把智能体运行参数放进 ``app.config['AGENT_SETTINGS']``（``agent`` 蓝图需要）。
 
-    @app.route('/auth/login',methods=['GET','POST'])
-    def login():
-        if request.method=='POST':
-            username=field('username',50,True);pw=request.form.get('password','')
-            if len(pw)>128:abort(400,description='密码过长')
-            user=g.db.scalar(select(User).where(User.username==username).with_for_update())
-            if user and user.locked_until and user.locked_until<=utcnow():user.failed_logins=0;user.locked_until=None
-            invalid=not user or not user.active or (user.locked_until and user.locked_until>utcnow())
-            if invalid or not check_password_hash(user.password_hash,pw):
-                if user and user.active and not(user.locked_until and user.locked_until>utcnow()):
-                    user.failed_logins+=1
-                    if user.failed_logins>=5:user.locked_until=utcnow()+timedelta(minutes=10)
-                flash('用户名或密码错误、账号停用或暂时锁定。请稍后重试。','error')
-            else:
-                user.failed_logins=0;user.locked_until=None;session.clear()
-                session.update(user_id=user.id,auth_version=user.auth_version,csrf_token=secrets.token_urlsafe(32));session.permanent=True
-                target=request.args.get('next','');parsed=urlsplit(target)
-                if not target.startswith('/') or target.startswith('//') or parsed.scheme or parsed.netloc or any(c in target for c in ['\\','\r','\n']):target=url_for('dashboard')
-                elif request.script_root and target != request.script_root and not target.startswith(request.script_root.rstrip('/')+'/'):
-                    target=request.script_root.rstrip('/')+target
-                return redirect(target)
-        return render_template('login.html')
+    缺少依赖或凭据时只记录告警并置 None，页面仍可打开、/ai 会给出人话提示，
+    不影响其余业务模块启动。
+    """
+    try:
+        from agent.runtime import AgentSettings  # type: ignore
 
-    @app.route('/auth/register',methods=['GET','POST'])
-    def register():
-        if request.method=='POST':
-            username=field('username',50,True)
-            if not re.fullmatch(r'[\w.-]{3,50}',username):abort(400,description='用户名须为3—50位字母、数字、中文或._-')
-            if request.form.get('role','2')!='2':abort(400,description='仅开放业主注册，维修人员请联系管理员开通')
-            if g.db.scalar(select(User.id).where(User.username==username)):abort(409,description='用户名已存在')
-            g.db.add(User(username=username,password_hash=generate_password_hash(password(request.form.get('password',''))),role=2))
-            flash('注册成功，请登录。房屋须由物业核验后绑定。','success');return redirect(url_for('login'))
-        return render_template('register.html')
+        project_dir = os.path.dirname(os.path.abspath(__file__))
+        application.config["AGENT_SETTINGS"] = AgentSettings.from_env(project_dir=project_dir)
+        log.info("智能体运行时配置就绪：provider=%s model=%s",
+                 application.config["AGENT_SETTINGS"].provider,
+                 application.config["AGENT_SETTINGS"].model)
+    except Exception:  # noqa: BLE001 - 智能体不可用不应阻断主站
+        log.warning("agent.runtime 未就绪，/ai 将提示运行时不可用", exc_info=True)
+        application.config["AGENT_SETTINGS"] = None
 
-    @app.post('/auth/logout')
-    @login_required
-    def logout():session.clear();return redirect(url_for('login'))
 
-    @app.get('/health')
-    def health():
-        g.db.execute(select(1));return jsonify(status='ok',database='ok')
+def shutdown_agent() -> None:
+    """进程退出时回收 dsh 子进程。"""
+    try:
+        from agent.routes import shutdown_agent_runtimes  # type: ignore
 
-    @app.get('/ready')
-    def ready():
-        missing=missing_schema(engine)
-        if missing:return jsonify(status='not_ready',database='ok',schema='upgrade_required',missing=missing),503
-        g.db.execute(select(1));return jsonify(status='ok',database='ok',schema='ok')
+        shutdown_agent_runtimes()
+    except Exception:  # noqa: BLE001
+        pass
 
-    @app.get('/dashboard')
-    @login_required
-    def dashboard():
-        q=scope_orders(select(WorkOrder),g.user)
-        counts={s:0 for s in STATUS_TEXT}
-        rows=g.db.execute(scope_orders(select(WorkOrder.status,func.count(WorkOrder.id)),g.user).group_by(WorkOrder.status)).all();counts.update(dict(rows))
-        return render_template('dashboard.html',orders=list(g.db.scalars(q.order_by(WorkOrder.created_at.desc()).limit(8))),counts=counts,notices=list(g.db.scalars(Policy(g.db,g.user).query(Notice).order_by(Notice.created_at.desc()).limit(5))))
 
-    @app.get('/orders')
-    @login_required
-    def orders():
-        q=scope_orders(select(WorkOrder),g.user).order_by(WorkOrder.created_at.desc(),WorkOrder.id.desc())
-        status=request.args.get('status','');search=request.args.get('q','').strip()
-        if len(search)>100:abort(400)
-        if status:
-            if status not in {str(s) for s in STATUS_TEXT}:abort(400,description='工单状态无效')
-            q=q.where(WorkOrder.status==int(status))
-        if search:q=q.where(or_(WorkOrder.title.contains(search,autoescape=True),WorkOrder.order_no.contains(search,autoescape=True)))
-        rows,page,total=paginate(q)
-        return render_template('orders.html',orders=rows,selected_status=status,q=search,page=page,total=total)
+def register_routes(app: Flask, with_ai: bool = True) -> None:
+    """注册全部页面路由。
 
-    @app.route('/orders/new',methods=['GET','POST'])
-    @role_required(2)
-    def new_order():
-        if request.method=='POST':
-            service=BusinessService(g.db,g.user,request.form)
-            order=service.create_order(save_image(request.files.get('image')))
-            flash('报修已提交','success');return redirect(url_for('order_detail',order_no=order.order_no))
-        houses=list(g.db.scalars(Policy(g.db,g.user).query(House)))
-        return render_template('order_form.html',houses=houses)
+    端点名与模板 ``url_for`` 完全一致：``houses_command`` / ``persons_command`` /
+    ``order_command`` / ``order_create``。``with_ai=False`` 时把 ``/ai*`` 交给 agent 蓝图。
+    """
+    app.add_url_rule("/login", "login", view_login, methods=["GET", "POST"])
+    app.add_url_rule("/logout", "logout", view_logout, methods=["POST"])
+    app.add_url_rule("/health", "health", view_health, methods=["GET"])
+    app.add_url_rule("/ready", "ready", view_health, methods=["GET"])
 
-    @app.route('/orders/<order_no>',methods=['GET','POST'])
-    @login_required
-    def order_detail(order_no):
-        order=get_order(order_no,request.method=='POST')
-        if request.method=='POST':
-            BusinessService(g.db,g.user,request.form).order_action(order_no)
-            flash('操作成功','success');return redirect(url_for('order_detail',order_no=order_no))
-        return render_template('order_detail.html',order=order,
-            logs=list(g.db.scalars(select(OrderLog).where(OrderLog.order_id==order.id).order_by(OrderLog.id.desc()))),
-            repairers=list(g.db.scalars(select(User).where(User.role==1,User.active.is_(True)))) if g.user.role==0 else [],
-            evaluation=g.db.scalar(select(Evaluation).where(Evaluation.order_id==order.id)),
-            owner=g.db.get(User,order.owner_id),repairer=g.db.get(User,order.repairer_id) if order.repairer_id else None,
-            house=g.db.get(House,order.house_id) if order.house_id else None)
+    app.add_url_rule("/", "dashboard", view_dashboard, methods=["GET"])
 
-    @app.route('/houses',methods=['GET','POST'])
-    @role_required(0)
-    def houses():
-        if request.method=='POST':
-            BusinessService(g.db,g.user,request.form).house_action()
-            flash('房屋操作成功','success');return redirect(url_for('houses'))
-        rows,page,total=paginate(select(House).order_by(House.building_name,House.unit,House.room_no))
-        users={u.id:u for u in g.db.scalars(select(User).where(User.role==2))}
-        return render_template('houses.html',houses=rows,owners=users,page=page,total=total)
+    app.add_url_rule("/houses", "houses", view_houses, methods=["GET"])
+    app.add_url_rule("/houses/<entity>/<action>", "houses_command", view_houses_post, methods=["POST"])
 
-    @app.get('/my-houses')
-    @role_required(2)
-    def my_houses():return render_template('my_houses.html',houses=list(g.db.scalars(Policy(g.db,g.user).query(House))))
+    app.add_url_rule("/persons", "persons", view_persons, methods=["GET"])
+    app.add_url_rule("/persons/<entity>/<action>", "persons_command", view_persons_post, methods=["POST"])
 
-    @app.route('/users',methods=['GET','POST'])
-    @role_required(0)
-    def users():
-        if request.method=='POST':
-            BusinessService(g.db,g.user,request.form).user_action()
-            flash('用户操作成功','success');return redirect(url_for('users'))
-        q=request.args.get('q','').strip()
-        if len(q)>50:abort(400)
-        query=select(User).order_by(User.id)
-        if q:query=query.where(User.username.contains(q,autoescape=True))
-        rows,page,total=paginate(query)
-        return render_template('users.html',users=rows,page=page,total=total,q=q)
+    app.add_url_rule("/orders", "orders", view_orders, methods=["GET"])
+    app.add_url_rule("/orders", "order_create", view_order_create, methods=["POST"])
+    app.add_url_rule("/orders/new", "order_new", view_order_new, methods=["GET"])
+    app.add_url_rule("/orders/<int:order_id>", "order_detail", view_order_detail, methods=["GET"])
+    app.add_url_rule("/orders/<int:order_id>/<action>", "order_command", view_order_action, methods=["POST"])
 
-    @app.route('/notices',methods=['GET','POST'])
-    @login_required
-    def notices():
-        if request.method=='POST':
-            if not Policy(g.db,g.user).super:abort(403)
-            BusinessService(g.db,g.user,request.form).notice_action()
-            flash('公告操作成功','success');return redirect(url_for('notices'))
-        rows,page,total=paginate(Policy(g.db,g.user).query(Notice).order_by(Notice.id.desc()))
-        return render_template('notices.html',notices=rows,page=page,total=total)
+    app.add_url_rule("/audit", "audit", view_audit, methods=["GET"])
 
-    @app.route('/notifications',methods=['GET','POST'])
-    @login_required
-    def notifications():
-        if request.method=='POST':
-            item=g.db.get(Notification,number('id'))
-            if not item or item.user_id!=g.user.id:abort(403)
-            item.is_read=True;return redirect(url_for('notifications'))
-        rows,page,total=paginate(select(Notification).where(Notification.user_id==g.user.id).order_by(Notification.id.desc()))
-        accessible={}
-        for item in rows:
-            order=g.db.get(WorkOrder,item.order_id) if item.order_id else None
-            if order and can_access_order(g.user,order):accessible[item.id]=order.order_no
-        return render_template('notifications.html',notifications=rows,links=accessible,page=page,total=total)
 
-    @app.get('/audit')
-    @role_required(0)
-    def audit_page():
-        rows,page,total=paginate(select(AuditLog).order_by(AuditLog.id.desc()))
-        return render_template('audit.html',logs=rows,page=page,total=total)
+def register_agent_routes(app: Flask) -> bool:
+    """注册 captain 提供的 ``agent.routes.ai_bp``（/ai 页面与 SSE 都归它）。"""
+    if not app.config.get("USE_AGENT_ROUTES", True):
+        return False
+    try:
+        from agent.routes import ai_bp  # type: ignore
+    except Exception:  # pragma: no cover - 取决于智能体模块是否就绪
+        log.info("agent.routes 未就绪，本次不注册 /ai 蓝图", exc_info=True)
+        return False
+    app.register_blueprint(ai_bp)
+    return True
 
-    @app.route('/profile',methods=['GET','POST'])
-    @login_required
-    def profile():
-        if request.method=='POST':
-            g.profile_before=domain_snapshot(g.user)
-            name=field('real_name',50);ph=field('phone',20)
-            if ph:phone(ph)
-            new=request.form.get('new_password','')
-            if new:
-                password(new)
-                if not check_password_hash(g.user.password_hash,request.form.get('current_password','')):abort(400,description='原密码不正确')
-            image=save_image(request.files.get('avatar'))
-            g.user.real_name=name;g.user.phone=ph
-            if new:
-                g.user.password_hash=generate_password_hash(new);g.user.auth_version+=1;session['auth_version']=g.user.auth_version
-            if image:g.user.avatar=url_for('uploaded_file',filename=image)
-            flash('资料已更新','success');return redirect(url_for('profile'))
-        return render_template('profile.html')
 
-    @app.get('/uploads/<filename>')
-    @login_required
-    def uploaded_file(filename):
-        if not re.fullmatch(r'[a-f0-9]{32}\.(?:jpg|jpeg|png|gif|webp)',filename):abort(404)
-        url=url_for('uploaded_file',filename=filename)
-        order=g.db.scalar(select(WorkOrder).where(WorkOrder.img_url.in_([filename,url])))
-        avatar=g.db.scalar(select(User).where(User.avatar.in_([filename,url])))
-        if not ((order and can_access_order(g.user,order)) or (avatar and (avatar.id==g.user.id or Policy(g.db,g.user).super))):abort(403)
-        return send_from_directory(folder,filename)
 
-    def ai_context():
-        p=Policy(g.db,g.user)
-        from property_service import snapshot as record_snapshot
-        orders=list(g.db.scalars(p.query(WorkOrder).order_by(WorkOrder.updated_at.desc()).limit(20)))
-        notices=list(g.db.scalars(p.query(Notice).order_by(Notice.id.desc()).limit(5)))
-        houses=list(g.db.scalars(p.query(House).order_by(House.id).limit(50))) if p.has('property.read') else []
-        from business_queries import QUERIES
-        permitted_queries=[k for k,v in QUERIES.items() if p.has(v)]
-        context={'identity':p.identity(),'queries':permitted_queries,
-                 'query_capabilities':[{'command':k,'permission':QUERIES[k],'risk_level':'R0','execution_mode':'READ_ONLY'} for k in permitted_queries],
-                 'role':'、'.join(sorted(p.roles)),'scope':'当前账号授权范围，最多20条工单、50套房屋、5条公告；其他记录通过lookup查询',
-                 'orders':[safe_record(record_snapshot(o)) for o in orders],
-                 'houses':[safe_record(record_snapshot(h)) for h in houses],
-                 'notices':[safe_record(record_snapshot(n)) for n in notices], 'commands':available_commands(g.user)}
-        if p.super:context['users']=[{'id':u.id,'name':u.real_name or u.username,'active':u.active,'auth_version':u.auth_version} for u in g.db.scalars(p.query(User).limit(100))]
-        digest=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True,default=str).encode()).hexdigest()
-        return json.loads(json.dumps(context,ensure_ascii=False,default=str)),digest
 
-    @app.get('/ai')
-    @login_required
-    def ai_page():return render_template('ai.html',ai_configured=app.extensions['dify'].configured)
+def register_ai_fallbacks(app: Flask) -> bool:
+    """在没有 ``ai`` 蓝图时，补一组 app 级 AI 端点（base.html 宏的回退分支用）。
 
-    @app.get('/ai/status')
-    @login_required
-    def ai_status():return jsonify(configured=app.extensions['dify'].configured,connection_verified=False,provider=getattr(app.extensions['dify'],'provider','dify'),model=getattr(app.extensions['dify'],'model',None),message='已填写 AI 服务配置，连接状态待检测。')
+    只做「不炸」：页面跳 `/ai`，接口返回可读 JSON 提示。有蓝图时什么都不做，
+    避免出现两套同名路由。
+    """
+    if "ai" in app.blueprints:
+        return False
+    from flask import jsonify, request
 
-    @app.post('/ai/check')
-    @role_required(0)
-    def ai_check():
-        try:return jsonify(app.extensions['dify'].check(infer=True))
-        except DifyUnavailable as exc:return jsonify(error=str(exc),code=exc.code),503
+    def _hint() -> tuple:
+        return jsonify({"ok": False, "error": "AI 助手模块未加载，暂时无法使用"}), 503
 
-    @app.post('/ai/chat')
-    @login_required
-    def ai_chat():
-        payload=request.get_json(silent=True)
-        if not isinstance(payload,dict):return jsonify(error='请求须为JSON对象'),400
-        message=payload.get('message')
-        if not isinstance(message,str) or not message.strip() or len(message)>2000:return jsonify(error='请输入1—2000字的问题'),400
-        cid=payload.get('conversation_id')
-        if cid is not None and (not isinstance(cid,str) or len(cid)>36):return jsonify(error='会话标识无效'),400
-        conversation=None
-        if cid:
-            conversation=g.db.get(AiConversation,cid)
-            if not conversation or conversation.user_id!=g.user.id:abort(403)
-        context,digest=ai_context()
-        authorized={item['command'] for item in context.get('commands', []) if isinstance(item,dict)} | set(context.get('queries', []))
-        planner_context=load_state(g.db,conversation,g.user) if conversation else {}
-        if 'resolved_order' not in planner_context:
-            accessible_orders=list(g.db.scalars(Policy(g.db,g.user).query(WorkOrder).limit(2)))
-            if len(accessible_orders)==1:
-                planner_context['resolved_order']={'id':accessible_orders[0].id,'order_no':accessible_orders[0].order_no}
-        if Policy(g.db,g.user).resident and 'resolved_house' not in planner_context:
-            own_houses=list(g.db.scalars(Policy(g.db,g.user).query(House).limit(2)))
-            if len(own_houses)==1:
-                planner_context['resolved_house']={'id':own_houses[0].id,'building_name':own_houses[0].building_name,'room_no':own_houses[0].room_no}
-                planner_context['resident_current_house']=True
-        if {'notice.save', 'notice.batch_publish'} & authorized:
-            writable=list(g.db.scalars(Policy(g.db,g.user).query(Community).limit(101)))
-            planner_context['writable_communities']=[{'id':c.id,'name':c.name} for c in writable]
-        planner_hint=plan_request(message, authorized, planner_context)
-        if planner_hint.get('intent')=='notice.save' and (planner_hint.get('arguments') or {}).get('building_name'):
-            from models import Building
-            building_name=planner_hint['arguments']['building_name']
-            planner_context['notice_building_candidates']=len(list(g.db.scalars(Policy(g.db,g.user).query(Building).where(Building.name.in_(_building_aliases(building_name))).limit(3))))
-            planner_hint=plan_request(message, authorized, planner_context)
-        person_name=(planner_hint.get('arguments') or {}).get('person_name')
-        if person_name:
-            person_candidates=len(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==person_name).limit(4)).all())
-            planner_context['person_candidates']=person_candidates
-            planner_hint=plan_request(message, authorized, planner_context)
-        if planner_hint.get('intent')=='parking.assign':
-            from models import ParkingSpace, Vehicle
-            values=planner_hint.get('arguments') or {}
-            policy=Policy(g.db,g.user)
-            vehicle_candidates=len(g.db.scalars(policy.query(Vehicle).where(Vehicle.plate==values.get('plate')).limit(3)).all()) if values.get('plate') else 0
-            parking_candidates=len(g.db.scalars(policy.query(ParkingSpace).where(ParkingSpace.code==values.get('space_code')).limit(3)).all()) if values.get('space_code') else 0
-            planner_context['vehicle_candidates']=vehicle_candidates
-            planner_context['parking_candidates']=parking_candidates
-            planner_hint=plan_request(message, authorized, planner_context)
-        if planner_hint.get('action') in {'CLARIFY','DISAMBIGUATE','DENY'} and planner_hint.get('entity_status') != 'REPEAT':
-            local_conversation=conversation
-            if not local_conversation:
-                local_conversation=AiConversation(id=str(uuid.uuid4()),user_id=g.user.id,auth_version=g.user.auth_version,scope_hash=digest)
-                g.db.add(local_conversation);g.db.flush()
-            planner_context['pending_plan'] = planner_hint
-            save_state(g.db,local_conversation,g.user,planner_context)
-            answers={'CLARIFY':'请补充必要的业务信息后再操作。','DISAMBIGUATE':'找到多个匹配对象，请提供更多信息以确认。','DENY':'该请求不在当前登录身份允许的范围内。'}
-            answer=planner_hint.get('clarification_text')
-            if not isinstance(answer,str) or not answer.strip():answer=answers[planner_hint['action']]
-            return jsonify(answer=answer.strip(),conversation_id=local_conversation.id,source='planner',scope=context['scope'],actions=[])
-        upstream=conversation.upstream_id if conversation and conversation.scope_hash==digest else ''
-        if g.db.scalar(select(func.count(AiGrant.id)).where(AiGrant.user_id==g.user.id,AiGrant.created_at>utcnow()-timedelta(minutes=1)))>=10:
-            return jsonify(error='请求过于频繁，请稍后再试'),429
-        token=issue_agent_token(Policy(g.db,g.user));gid=str(uuid.uuid4());uid=g.user.id;auth=g.user.auth_version
-        supplied_request_id=payload.get('agent_request_id')
-        if supplied_request_id is not None and (not isinstance(supplied_request_id,str) or not re.fullmatch(r'[A-Za-z0-9._:-]{8,80}',supplied_request_id)):
-            return jsonify(error='agent_request_id格式无效',code='VALIDATION_ERROR'),400
-        agent_request_id=supplied_request_id or uuid.uuid4().hex
-        g.db.add(AiGrant(id=gid,token_hash=hashlib.sha256(token.encode()).hexdigest(),user_id=uid,auth_version=auth,expires_at=utcnow()+timedelta(minutes=3)))
-        g.db.commit()
-        is_bailian=isinstance(app.extensions['dify'],OpenAICompatibleAgentClient)
-        if conversation and is_bailian and hasattr(app.extensions['dify'],'hydrate_history'):
-            app.extensions['dify'].hydrate_history(f'property:{uid}:v{auth}', conversation.upstream_id or conversation.id, load_messages(g.db,conversation,g.user))
-        if is_bailian:
-            prompt=message.strip()
-            system_instruction=(AGENT_SYSTEM_PROMPT+'\n当前授权摘要（仅供规划，最终权限以后端实时校验为准）：'+json.dumps(context,ensure_ascii=False)+
-                                '\n确定性规划提示（只用于缩小候选，不代表授权）：'+json.dumps(planner_hint,ensure_ascii=False)+
-                                '\n本地工具调用无需提供request_token；服务端自动绑定本轮登录身份。')
-        else:
-            prompt=(AGENT_SYSTEM_PROMPT+'\n本次request_token：'+token+'\n授权数据：'+json.dumps(context,ensure_ascii=False)+'\n用户请求：'+message.strip())
-            system_instruction=''
-        mutation_commands=set()
-        def planner_tool_call():
-            command=planner_hint.get('intent')
-            values=dict(planner_hint.get('arguments') or {})
-            repeat_create=planner_hint.get('entity_status')=='REPEAT' and command=='order.create'
-            if (planner_hint.get('action') not in {'TOOL','CONFIRM'} and not repeat_create) or not command:
-                return None
-            if repeat_create:
-                return {'operation':'execute','command':'order.create','arguments_json':'{}'}
-            from models import Bill, Building, Complaint, FeeItem, Inspection, ParkingSpace, Person as DomainPerson, Vehicle
-            policy=Policy(g.db,g.user)
-            def one_person(name=None, phone=None):
-                if not name and not phone:return None
-                q=policy.query(DomainPerson)
-                if name:q=q.where(DomainPerson.name==name)
-                if phone:q=q.where(DomainPerson.phone==phone)
-                rows=list(g.db.scalars(q.limit(2)))
-                return rows[0] if len(rows)==1 else None
-            def one_house():
-                q=policy.query(House)
-                if values.get('building_name'):q=q.where(House.building_name.in_(_building_aliases(values['building_name'])))
-                if values.get('unit'):q=q.where(House.unit.in_(_unit_aliases(values['unit'])))
-                if values.get('room_no') is not None:q=q.where(House.room_no==values['room_no'])
-                rows=list(g.db.scalars(q.limit(2)))
-                return rows[0] if len(rows)==1 else None
-            def one_order():
-                q=policy.query(WorkOrder)
-                if values.get('order_no'):q=q.where(WorkOrder.order_no==values['order_no'])
-                elif planner_context.get('resolved_order',{}).get('id'):q=q.where(WorkOrder.id==planner_context['resolved_order']['id'])
-                else:q=q.order_by(WorkOrder.updated_at.desc())
-                rows=list(g.db.scalars(q.limit(2)))
-                return rows[0] if len(rows)==1 else None
-            params={}
-            operation='lookup' if command in {'house.search','person.search','order.search','billing.unpaid','complaint.stats','whoami','notice.read'} else ('propose' if planner_hint.get('action')=='CONFIRM' else 'execute')
-            if command=='house.search':
-                params={k:values[k] for k in ('building_name','unit','room_no') if k in values}
-            elif command=='person.search':
-                params={k:values[k] for k in ('person_name','phone') if k in values}
-            elif command=='order.search':
-                if values.get('order_no'):params={'order_no':values['order_no']}
-                elif planner_context.get('resolved_order',{}).get('id'):params={'id':planner_context['resolved_order']['id']}
-            elif command in {'notice.read','whoami','complaint.stats'}:
-                params={}
-            elif command=='billing.unpaid':
-                params={k:values[k] for k in ('building_name','unit','room_no','month') if k in values}
-                if values.get('person_name') or values.get('phone'):
-                    person=one_person(values.get('person_name'),values.get('phone'))
-                    if not person:return None
-                    params['person_id']=person.id
-            elif command=='person.save':
-                person=planner_context.get('resolved_person') or {}
-                if not person.get('id'):
-                    found=one_person(values.get('person_name'),values.get('phone'))
-                    if not found:return None
-                    person={'id':found.id,'name':found.name}
-                current=g.db.get(DomainPerson,int(person['id']))
-                if not current:return None
-                params={'id':current.id,'version':current.version,'community_id':current.community_id,'name':current.name,'phone':values['phone']}
-            elif command=='notice.archive':
-                notice_id=values.get('notice_id') or (planner_context.get('resolved_notice') or {}).get('id')
-                if not notice_id:return None
-                notice=policy.get(Notice,int(notice_id))
-                params={'id':notice.id,'version':notice.version,'reason':message.strip()}
-            elif command in {'notice.save','notice.batch_publish'}:
-                communities=planner_context.get('writable_communities') or []
-                named=values.get('community_name')
-                matches=[row for row in communities if not named or row.get('name')==named]
-                title=values.get('notice_title') or values.get('title')
-                content=values.get('notice_content') or values.get('content')
-                if not title or not content or not communities:return None
-                if command=='notice.save' and values.get('notice_id'):
-                    notice=policy.get(Notice,int(values['notice_id']))
-                    params={'id':notice.id,'version':notice.version,'community_id':notice.community_id,'building_id':notice.building_id,'title':title,'content':content}
-                elif command=='notice.batch_publish':
-                    params={'community_ids':[int(row['id']) for row in communities],'title':title,'content':content}
-                else:
-                    if len(matches)!=1:return None
-                    cid=int(matches[0]['id'])
-                    bid=None
-                    if values.get('notice_scope')=='building' or values.get('building_name'):
-                        building_name=values.get('building_name')
-                        buildings=list(g.db.scalars(policy.query(Building).where(Building.community_id==cid,Building.name.in_(_building_aliases(building_name))).limit(2)))
-                        if len(buildings)!=1:return None
-                        bid=buildings[0].id
-                    params={'community_id':cid,'building_id':bid,'title':title,'content':content}
-            elif command=='order.create':
-                house=one_house()
-                if not house:return None
-                content=message.split('，',1)[-1].strip() or message.strip()
-                params={'house_id':house.id,'community_id':house.community_id,'building_id':house.building_id,'title':content[:100],'content':content,'type':'其他'}
-            elif command=='vehicle.save':
-                person=one_person(values.get('person_name'),values.get('phone'))
-                house=one_house()
-                if not person or not house or not values.get('plate'):return None
-                params={'house_id':house.id,'person_id':person.id,'plate':values['plate'],'model':''}
-            elif command=='device.save':
-                building_name=values.get('building_name')
-                code=values.get('space_code')
-                building=g.db.scalar(policy.query(Building).where(Building.name.in_(_building_aliases(building_name)))) if building_name else None
-                if not building or not code:return None
-                name='水泵' if '水泵' in message else message.split('，',1)[0][:100]
-                params={'community_id':building.community_id,'building_id':building.id,'code':code,'name':name,'category':'equipment','location':'','status':'normal'}
-            elif command=='parking.assign':
-                space_code=values.get('space_code');plate=values.get('plate')
-                if not space_code or not plate:return None
-                space=g.db.scalar(policy.query(ParkingSpace).where(ParkingSpace.code==space_code))
-                vehicle=g.db.scalar(policy.query(Vehicle).where(Vehicle.plate==plate))
-                if not space or not vehicle:return None
-                params={'space_id':space.id,'vehicle_id':vehicle.id}
-            elif command in {'order.assign','order.accept','order.progress','order.finish','order.reopen','order.close'}:
-                order=one_order()
-                if not order:return None
-                params={'id':order.id,'version':order.version}
-                if command=='order.assign':
-                    person=one_person(values.get('repairer_name'))
-                    repairer_id=person.user_id if person else None
-                    if not repairer_id:return None
-                    params['repairer_id']=repairer_id
-                elif command in {'order.progress','order.finish','order.reopen','order.close'}:
-                    params['remark']=message.strip()
-            elif command=='complaint.resolve':
-                complaint=g.db.scalar(policy.query(Complaint).order_by(Complaint.updated_at.desc()))
-                if not complaint:return None
-                params={'id':complaint.id,'version':complaint.version,'resolution':message.split('，',1)[-1].strip()}
-            elif command=='bill.batch':
-                building=one_house()
-                if not building:return None
-                fee=g.db.scalar(policy.query(FeeItem).limit(1))
-                if not fee:return None
-                month=(utcnow()+timedelta(hours=8)).strftime('%Y-%m')
-                params={'building_id':building.building_id,'fee_item_id':fee.id,'period':month,'due_date':(utcnow()+timedelta(days=30)).date().isoformat()}
-            elif command=='payment.record':
-                bill_id=values.get('bill_id') or values.get('id')
-                if not bill_id or 'amount' not in values:return None
-                bill=g.db.get(Bill,int(bill_id))
-                if not bill:return None
-                params={'bill_id':bill.id,'version':bill.version,'amount':values['amount'],'channel':'cash','reference':''}
-            elif command=='payment.reverse':
-                payment_id=values.get('id')
-                if not payment_id:return None
-                from models import Payment
-                payment=g.db.get(Payment,int(payment_id))
-                if not payment:return None
-                params={'id':payment.id,'version':payment.version,'reason':message.strip()}
-            else:
-                return None
-            return {'operation':operation,'command':command,'arguments_json':json.dumps(params,ensure_ascii=False)}
-        planner_hint['tool_call']=planner_tool_call()
-        def bailian_tool(args):
-            try:
-                grant,actor=grant_actor(g.db,token if is_bailian else args.get('request_token'))
-                operation=args.get('operation')
-                if operation=='context':return {'ok':True,'code':'SUCCESS','data':ai_context()[0],'terminal':True}
-                if planner_hint.get('action') in {'CLARIFY','DISAMBIGUATE','DENY'} and planner_hint.get('entity_status') != 'REPEAT' and operation in {'execute','propose'} and planner_hint.get('intent') != 'relation.bind_by_name':
-                    code={'CLARIFY':'MISSING_PARAMETER','DISAMBIGUATE':'AMBIGUOUS_ENTITY','DENY':'PERMISSION_DENIED'}[planner_hint['action']]
-                    return {'ok':False,'code':code,'message':'请先完成必要的澄清、身份确认或权限校验。','terminal':False}
-                raw=args.get('arguments_json','{}')
-                if not isinstance(raw,str) or len(raw)>10000:return {'error':'arguments_json无效'}
-                params=json.loads(raw)
-                if operation=='lookup':return structured_result(domain_query(g.db,actor,args.get('command'),params),'lookup')
-                if operation not in {'execute','propose'}:return {'error':'工具操作类型无效'}
-                command=args.get('command')
-                if command in mutation_commands:return {'error':'本轮已处理该业务命令，请先查看结果再继续'}
-                if planner_hint.get('entity_status') == 'REPEAT' and command == 'order.create':
-                    existing=g.db.scalar(Policy(g.db,g.user).query(WorkOrder).order_by(WorkOrder.updated_at.desc()))
-                    if existing:
-                        mutation_commands.add(command)
-                        return {'ok':True,'code':'ALREADY_EXECUTED','message':'已有报修记录，本轮未重复提交。','data':{'id':existing.id},'terminal':True}
-                from agent_tools import perform
-                request_key=agent_request_key(uid,conversation.id if conversation else 'new',agent_request_id,command)
-                item=perform(g.db,actor,grant,command,params,request_key=request_key) if operation=='execute' else propose(g.db,actor,grant,command,params,request_key=request_key)
-                result_view=action_view(item,model_safe=True)
-                if result_view.get('status') in {'executed','pending'}:mutation_commands.add(command)
-                g.db.commit();return structured_result(result_view,operation)
-            except (HTTPException,ValueError,TypeError,KeyError) as exc:
-                g.db.rollback();message=getattr(exc,'description',str(exc))[:300]
-                return {'ok':False,'error':message,'message':message,'code':error_code_for(getattr(exc,'code',400) or 400,message),'terminal':False}
-        if payload.get('stream') is True:
-            stream_db=factory()
-            def stream_result():
-                nonlocal conversation
-                g.db=stream_db;g.user=stream_db.get(User,uid)
-                if conversation:conversation=stream_db.get(AiConversation,conversation.id)
-                failure=None;result=None
-                if not ai_slots.acquire(blocking=False):
-                    grant=g.db.get(AiGrant,gid);grant.expires_at=utcnow();g.db.commit()
-                    yield 'data: '+json.dumps({'type':'error','error':'AI正在处理其他任务，请稍后再试'},ensure_ascii=False)+'\n\n';return
-                try:
-                    if isinstance(app.extensions['dify'],OpenAICompatibleAgentClient):
-                        command_token=_TOOL_COMMANDS.set(authorized)
-                        planner_token=_PLANNER_HINT.set(planner_hint)
-                        try:
-                            for event in app.extensions['dify'].chat_stream(prompt,f'property:{uid}:v{auth}',upstream,bailian_tool,system_prompt=system_instruction):
-                                if event['type']=='delta':
-                                    yield 'data: '+json.dumps({'type':'delta','content':redact_provider_text(event['content'],token)},ensure_ascii=False)+'\n\n'
-                                elif event['type']=='done':result=event
-                        finally:
-                            _PLANNER_HINT.reset(planner_token)
-                            _TOOL_COMMANDS.reset(command_token)
-                    else:
-                        result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream)
-                        yield 'data: '+json.dumps({'type':'delta','content':redact_provider_text(result['answer'],token)},ensure_ascii=False)+'\n\n'
-                except DifyUnavailable as exc:failure=exc
-                finally:ai_slots.release()
-                g.db.rollback();g.db.expire_all();g.user=g.db.get(User,uid)
-                grant=g.db.get(AiGrant,gid)
-                if grant:grant.expires_at=utcnow()
-                g.db.commit()
-                if not g.user or not g.user.active or g.user.auth_version!=auth:
-                    yield 'data: '+json.dumps({'type':'error','error':'账号权限已变化，请重新登录'},ensure_ascii=False)+'\n\n';return
-                current,current_digest=ai_context()
-                own_execution=g.db.scalar(select(AiAction.id).where(AiAction.grant_id==gid,AiAction.status=='executed').limit(1))
-                if current_digest!=digest and not own_execution:
-                    yield 'data: '+json.dumps({'type':'error','error':'业务数据在回答期间发生变化，请重新提问以获取当前信息'},ensure_ascii=False)+'\n\n';return
-                if failure:
-                    yield 'data: '+json.dumps({'type':'error','error':str(failure),'code':failure.code},ensure_ascii=False)+'\n\n';return
-                if not result:
-                    yield 'data: '+json.dumps({'type':'error','error':'百炼未返回有效文本','code':'bad_response'},ensure_ascii=False)+'\n\n';return
-                if not conversation:conversation=AiConversation(id=str(uuid.uuid4()),user_id=uid,auth_version=auth);g.db.add(conversation)
-                conversation.upstream_id=result['conversation_id'];conversation.scope_hash=digest;conversation.updated_at=utcnow()
-                remembered=dict(planner_context)
-                values=planner_hint.get('arguments') or {}
-                _remember_business_selector(remembered, planner_hint.get('intent'), values)
-                if planner_hint.get('action') in {'CLARIFY', 'DISAMBIGUATE'}:
-                    remembered['pending_plan'] = planner_hint
-                else:
-                    remembered.pop('pending_plan', None)
-                if values.get('person_name'):
-                    rows=list(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==values['person_name']).limit(2)))
-                    if len(rows)==1:remembered['resolved_person']={'id':rows[0].id,'name':rows[0].name}
-                if values.get('building_name') and values.get('room_no') is not None:
-                    q=Policy(g.db,g.user).query(House).where(House.building_name.in_(_building_aliases(values['building_name'])),House.room_no==values['room_no'])
-                    if values.get('unit'):q=q.where(House.unit.in_(_unit_aliases(values['unit'])))
-                    rows=list(g.db.scalars(q.limit(2)))
-                    if len(rows)==1:remembered['resolved_house']={'id':rows[0].id,'building_name':rows[0].building_name,'room_no':rows[0].room_no}
-                if planner_hint.get('intent','').startswith('order.'):
-                    row=g.db.scalar(Policy(g.db,g.user).query(WorkOrder).order_by(WorkOrder.updated_at.desc()))
-                    if row:remembered['resolved_order']={'id':row.id,'order_no':row.order_no}
-                if planner_hint.get('intent','').startswith('notice.'):
-                    row=g.db.scalar(Policy(g.db,g.user).query(Notice).order_by(Notice.updated_at.desc()))
-                    if row:remembered['resolved_notice']={'id':row.id,'title':row.title,'community_id':row.community_id,'building_id':row.building_id}
-                provider_id=result.get('conversation_id') or conversation.upstream_id or conversation.id
-                provider_messages = app.extensions['dify'].get_history(f'property:{uid}:v{auth}', provider_id) if hasattr(app.extensions['dify'],'get_history') else None
-                save_state(g.db,conversation,g.user,remembered,provider_messages)
-                actions=[action_view(x) for x in g.db.scalars(select(AiAction).where(AiAction.grant_id==gid).order_by(AiAction.created_at))]
-                g.db.commit()
-                yield 'data: '+json.dumps({'type':'done','conversation_id':conversation.id,'agent_request_id':agent_request_id,'source':getattr(app.extensions['dify'],'provider','dify'),'scope':context['scope'],'actions':actions},ensure_ascii=False)+'\n\n'
-            return Response(stream_with_context(stream_result()),mimetype='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
-        failure=None;result=None
-        if not ai_slots.acquire(blocking=False):
-            grant=g.db.get(AiGrant,gid);grant.expires_at=utcnow();g.db.commit();return jsonify(error='AI正在处理其他任务，请稍后再试'),429
+    app.add_url_rule("/ai", "ai_page", lambda: _hint())
+    app.add_url_rule("/ai/chat", "ai_chat", _hint, methods=["GET", "POST"])
+    app.add_url_rule("/ai/actions", "ai_actions", _hint)
+    app.add_url_rule(
+        "/ai/actions/<int:action_id>/confirm", "ai_actions_confirm", _hint, methods=["POST"]
+    )
+    app.add_url_rule(
+        "/ai/actions/<int:action_id>/cancel", "ai_actions_cancel", _hint, methods=["POST"]
+    )
+    app.add_url_rule(
+        "/ai/sessions/<int:session_id>", "ai_session_messages", _hint
+    )
+    log.warning("未加载 ai 蓝图，已注册 %d 个 AI 回退端点", len(app.url_map._rules) and 6)
+    return True
+
+
+def register_leases_page(app: Flask) -> bool:
+    """注册租赁页面（``ops_routes`` 之外的独立模块，端点名与模板一致）。"""
+    try:
+        from leases_routes import register_leases_routes  # type: ignore
+    except Exception:  # pragma: no cover
+        log.info("leases_routes 未就绪，本次不注册租赁页", exc_info=True)
+        return False
+    register_leases_routes(app)
+    return True
+
+
+def register_ops_module_routes(app: Flask) -> bool:
+    """注册 ``ops_routes``（投诉/访客/车辆车位/设备巡检/收费页面）。
+
+    兼容两种交付形态：优先注册蓝图 ``ops_bp``；模块若只提供 ``register_ops_routes(app)``
+    就回退到函数式注册（当前实现走的是后者，端点名为 bills/complaints/visitors/… ）。
+    """
+    try:
+        from ops_routes import ops_bp  # type: ignore
+
+        app.register_blueprint(ops_bp)
+        return True
+    except Exception:
+        log.info("ops_routes 未提供 ops_bp 蓝图，改用 register_ops_routes(app)")
+    try:
+        from ops_routes import register_ops_routes  # type: ignore
+    except Exception:  # pragma: no cover - 运营模块未就绪时不影响主站
+        log.info("ops_routes 未就绪，本次不注册运营模块页面", exc_info=True)
+        return False
+    register_ops_routes(app)
+    return True
+
+
+def register_error_handlers(app: Flask) -> None:
+    """400/401/403/404/500 统一渲染 ``error.html``（未登录时渲染登录页外壳）。"""
+
+    #: 错误页渲染失败时的最小兜底（避免「错误页自己也 500」，把原始错误彻底掩盖）
+    _FALLBACK_HTML = (
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        "<title>{code}</title></head><body style=\"font-family:system-ui;padding:40px\">"
+        "<h1>{code} {title}</h1><p>{message}</p><p><a href=\"/\">返回工作台</a></p>"
+        "</body></html>"
+    )
+
+    def render_error(code: int, message: str):
+        if wants_json():
+            return {"ok": False, "code": code, "message": message}, code
+        title = ERROR_TITLES.get(code, "出错了")
         try:
-            try:
-                if isinstance(app.extensions['dify'],OpenAICompatibleAgentClient):
-                    command_token=_TOOL_COMMANDS.set(authorized)
-                    planner_token=_PLANNER_HINT.set(planner_hint)
-                    try:result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream,bailian_tool,system_prompt=system_instruction)
-                    finally:
-                        _PLANNER_HINT.reset(planner_token)
-                        _TOOL_COMMANDS.reset(command_token)
-                else:result=app.extensions['dify'].chat(prompt,f'property:{uid}:v{auth}',upstream)
-            except DifyUnavailable as exc:failure=exc
-        finally:ai_slots.release()
-        g.db.rollback();g.db.expire_all();g.user=g.db.get(User,uid)
-        grant=g.db.get(AiGrant,gid)
-        if grant:grant.expires_at=utcnow()
-        g.db.commit()
-        if not g.user or not g.user.active or g.user.auth_version!=auth:return jsonify(error='账号权限已变化，请重新登录'),401
-        current,current_digest=ai_context()
-        own_execution=g.db.scalar(select(AiAction.id).where(AiAction.grant_id==gid,AiAction.status=='executed').limit(1))
-        if current_digest!=digest and not own_execution:return jsonify(error='业务数据在回答期间发生变化，请重新提问以获取当前信息'),409
-        if failure:return jsonify(error=str(failure),code=failure.code),503
-        if not conversation:conversation=AiConversation(id=str(uuid.uuid4()),user_id=uid,auth_version=auth);g.db.add(conversation)
-        conversation.upstream_id=result['conversation_id'];conversation.scope_hash=digest;conversation.updated_at=utcnow()
-        remembered=dict(planner_context)
-        values=planner_hint.get('arguments') or {}
-        _remember_business_selector(remembered, planner_hint.get('intent'), values)
-        if planner_hint.get('action') in {'CLARIFY', 'DISAMBIGUATE'}:
-            remembered['pending_plan'] = planner_hint
-        else:
-            remembered.pop('pending_plan', None)
-        if values.get('person_name'):
-            rows=list(g.db.scalars(Policy(g.db,g.user).query(Person).where(Person.name==values['person_name']).limit(2)))
-            if len(rows)==1:remembered['resolved_person']={'id':rows[0].id,'name':rows[0].name}
-        if values.get('building_name') and values.get('room_no') is not None:
-            q=Policy(g.db,g.user).query(House).where(House.building_name.in_(_building_aliases(values['building_name'])),House.room_no==values['room_no'])
-            if values.get('unit'):q=q.where(House.unit.in_(_unit_aliases(values['unit'])))
-            rows=list(g.db.scalars(q.limit(2)))
-            if len(rows)==1:remembered['resolved_house']={'id':rows[0].id,'building_name':rows[0].building_name,'room_no':rows[0].room_no}
-        if planner_hint.get('intent','').startswith('order.'):
-            row=g.db.scalar(Policy(g.db,g.user).query(WorkOrder).order_by(WorkOrder.updated_at.desc()))
-            if row:remembered['resolved_order']={'id':row.id,'order_no':row.order_no}
-        if planner_hint.get('intent','').startswith('notice.'):
-            row=g.db.scalar(Policy(g.db,g.user).query(Notice).order_by(Notice.updated_at.desc()))
-            if row:remembered['resolved_notice']={'id':row.id,'title':row.title,'community_id':row.community_id,'building_id':row.building_id}
-        provider_id=result.get('conversation_id') or conversation.upstream_id or conversation.id
-        provider_messages = app.extensions['dify'].get_history(f'property:{uid}:v{auth}', provider_id) if hasattr(app.extensions['dify'],'get_history') else None
-        save_state(g.db,conversation,g.user,remembered,provider_messages)
-        return jsonify(answer=redact_provider_text(result['answer'],token),conversation_id=conversation.id,agent_request_id=agent_request_id,source=getattr(app.extensions['dify'],'provider','dify'),scope=context['scope'],
-                       actions=[action_view(x) for x in g.db.scalars(select(AiAction).where(AiAction.grant_id==gid).order_by(AiAction.created_at))])
+            return (
+                render_template(
+                    "error.html",
+                    code=code,
+                    title=title,
+                    message=message,
+                    back_url=url_for("dashboard")
+                    if session.get(SESSION_USER_ID)
+                    else url_for("login"),
+                ),
+                code,
+            )
+        except Exception:  # pragma: no cover - 模板出问题时仍要给出可读错误页
+            current_app.logger.exception("错误页模板渲染失败，退化为最小 HTML（code=%s）", code)
+            return _FALLBACK_HTML.format(code=code, title=title, message=message), code
 
-    @app.post('/api/agent/tools')
-    def agent_tool():
-        payload=request.get_json(silent=True)
-        if not isinstance(payload,dict):abort(400)
-        grant,actor=grant_actor(g.db,payload.get('request_token'));g.user=actor
-        operation=payload.get('operation')
-        if operation=='context':return jsonify(ai_context()[0])
-        if operation not in {'lookup','execute','propose'}:abort(400,description='工具支持context/lookup/execute/propose；高风险确认须由登录用户操作')
-        args=payload.get('arguments_json','{}')
-        if not isinstance(args,str) or len(args)>10000:abort(400)
-        try:params=json.loads(args)
-        except ValueError:abort(400,description='arguments_json不是有效JSON')
-        if operation=='lookup':return jsonify(domain_query(g.db,actor,payload.get('command'),params))
-        from agent_tools import perform
-        request_id=payload.get('agent_request_id') or uuid.uuid4().hex
-        if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9._:-]{8,80}',request_id):abort(400,description='agent_request_id格式无效')
-        request_key=agent_request_key(actor.id,'api',request_id,payload.get('command'))
-        item=perform(g.db,actor,grant,payload.get('command'),params,request_key=request_key) if operation=='execute' else propose(g.db,actor,grant,payload.get('command'),params,request_key=request_key)
-        result=action_view(item,model_safe=True)
-        result['agent_request_id']=request_id
-        return jsonify(result)
+    @app.errorhandler(HTTPException)
+    def handle_http_error(exc: HTTPException):  # pragma: no cover - 由 Flask 调用
+        code = exc.code or 500
+        message = exc.description or ERROR_TITLES.get(code, "请求无法完成")
+        if code == 401 and not session.get(SESSION_USER_ID):
+            return redirect(url_for("login", next=request.full_path if request.method == "GET" else "/"))
+        return render_error(code, message)
 
-    @app.get('/ai/actions')
-    @login_required
-    def ai_actions():
-        rows=g.db.scalars(select(AiAction).where(AiAction.user_id==g.user.id,AiAction.auth_version==g.user.auth_version,AiAction.status.in_(['pending','executed']),AiAction.expires_at>utcnow()).order_by(AiAction.created_at.desc()).limit(20))
-        return jsonify(actions=[action_view(x) for x in rows])
+    @app.errorhandler(Exception)
+    def handle_unexpected(exc: Exception):  # pragma: no cover - 由 Flask 调用
+        if isinstance(exc, HTTPException):
+            return handle_http_error(exc)
+        if isinstance(exc, services.ServiceError):
+            _db().rollback()
+            flash(exc.message, "error")
+            return redirect(request.referrer or url_for("dashboard"))
+        app.logger.exception("未处理的异常：%s", exc)
+        return render_error(500, "系统开小差了，请稍后重试")
 
-    @app.post('/ai/actions/<action_id>/confirm')
-    @login_required
-    def ai_action_confirm(action_id):
-        item=g.db.get(AiAction,action_id)
-        if app.config.get('APP_ENV')=='production' and item and item.status=='pending' and risk_for(item.command)==R3:
-            until=float(session.get('agent_step_up_until',0) or 0)
-            supplied=(request.get_json(silent=True) or {}).get('current_password') or request.form.get('current_password')
-            if until<=time.time():
-                if not isinstance(supplied,str) or not check_password_hash(g.user.password_hash,supplied):
-                    abort(401,description='R3 操作需要重新验证当前密码')
-                session['agent_step_up_until']=time.time()+300
-        return jsonify(confirm(g.db,g.user,action_id))
 
-    @app.post('/ai/actions/<action_id>/cancel')
-    @login_required
-    def ai_action_cancel(action_id):
-        item=g.db.scalar(select(AiAction).where(AiAction.id==action_id).with_for_update())
-        if not item or item.user_id!=g.user.id:abort(403)
-        if item.status!='pending':abort(409)
-        item.status='cancelled';audit('ai_cancel',item.id,item.command)
-        return jsonify(action_view(item))
+def create_app(overrides: dict | None = None) -> Flask:
+    """应用工厂（``waitress``/``gunicorn`` 用 ``app:create_app()``）。"""
+    cfg = app_config.get_config(overrides)
+    application = Flask(
+        __name__, template_folder="templates", static_folder="static", static_url_path="/static"
+    )
+    application.config.update(cfg.to_flask())
+    if overrides:
+        application.config.update(overrides)
+    application.json.ensure_ascii = False
+    application.json.sort_keys = False
+    application.secret_key = application.config["SECRET_KEY"]
 
-    return app
+    # 反向代理（nginx 子路径 /wuye/）支持：认 X-Forwarded-Prefix，把 SCRIPT_NAME 设成真实前缀，
+    # url_for / request.script_root 才会生成 /wuye/... 的地址。
+    # 直连（本地开发、/health 自检）没有这个头，行为完全不变。
+    application.wsgi_app = ProxyFix(
+        application.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
+    )
 
-if __name__=='__main__':
-    from werkzeug.serving import run_simple
-    run_simple(os.getenv('HOST','127.0.0.1'),int(os.getenv('PORT','5000')),create_app(),use_reloader=False)
+    app_db.init_app(application)
+    register_jinja(application)
+    agent_owns_ai = register_agent_routes(application)
+    register_ai_fallbacks(application)
+
+    # 把真实存在的 AI 端点写进 config，供模板宏判定（request.blueprints 是「当前请求」的
+    # 蓝图集合，在 dashboard 等页面恒为空，用它判定会误判）。
+    _eps = {rule.endpoint for rule in application.url_map.iter_rules()}
+    application.config["AI_ENDPOINTS"] = sorted(e for e in _eps if e == "ai_page" or e.startswith("ai."))
+
+    load_agent_settings(application)
+    register_routes(application, with_ai=not agent_owns_ai)
+    register_ops_module_routes(application)
+    register_leases_page(application)
+    register_error_handlers(application)
+    return application
+
+
+def main() -> None:
+    """``python app.py``：本地 http 演示入口（回环地址上关闭 Secure Cookie 并打印地址）。"""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    cfg = app_config.get_config()
+    run_app = create_app()
+    if run_app.config.get("SESSION_COOKIE_SECURE"):
+        run_app.config["SESSION_COOKIE_SECURE"] = False
+        print("[提示] 本地入口已关闭 Secure Cookie（线上请用 Waitress 并保持 COOKIE_SECURE=1）")
+    host = run_app.config.get("HOST", "127.0.0.1")
+    port = int(run_app.config.get("PORT", 5000))
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    print(f"[启动] {cfg.APP_NAME} http://{shown}:{port}/   健康检查 http://{shown}:{port}/health")
+    run_app.run(host=host, port=port, debug=False, threaded=True)
+
+
+if __name__ == "__main__":
+    main()

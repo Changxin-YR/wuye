@@ -1,8 +1,56 @@
+# ---------- secrets & local config ----------
 .env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# keep the template (must stay tracked)
+!.env.example
+
+# ---------- virtualenv / python ----------
 .venv/
 venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-uploads/*
+.mypy_cache/
+.ruff_cache/
+
+# ---------- runtime state ----------
+/instances/
+/uploads/*
 !uploads/.gitkeep
+
+# internal team state (AgentTeams) - never published
+/.agent-teams/
+
+# ---------- local evidence, logs and handoff material (never published) ----------
+/artifacts/
+/HANDOFF/
+/checkpoint_evidence/
+/demo-logs/
+/tests/_legacy/
+
+# ---------- previous rewrite iterations (kept on disk only) ----------
+/_legacy/
+
+# ---------- publishing workspace ----------
+/.publish/
+
+# ---------- scratch operator scripts at repo root ----------
+/_*.sh
+/_*.py
+# ---------- stale test-run log from the previous iteration (kept on disk) ----------
+/docs/CURRENT_FULL_TEST_ATTEMPT.txt
+# ---------- v1-era documents that describe the pre-rewrite architecture -----
+# Kept on disk for reference only, deliberately not published: they name modules,
+# classes and endpoints that no longer exist in this tree (the property_service
+# module, BusinessService, DifyClient, /api/business/*, /api/agent/tools, manage.py)
+# or cite tests that now live only under tests/_legacy/.
+# Current documentation: README.md, docs/REWRITE_CONTRACT.md, docs/TEMPLATE_CONTRACT.md.
+/docs/SYSTEM_FUNCTION_MATRIX.md
+/docs/AGENT_SECURITY_ARCHITECTURE.md
+/docs/AGENT_SECURITY_TEST_MATRIX.md
+/docs/开发规格说明书.md
+/config/dify_agent_openapi.json

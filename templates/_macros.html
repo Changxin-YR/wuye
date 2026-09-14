@@ -1,0 +1,8 @@
+{#- 全站共用宏：单独成文件，避免被 base.html 的并发编辑覆盖 -#}
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf_token if csrf_token is string else csrf_token() }}">{% endmacro %}
+
+{#- 状态样式类：后端给的可能是语义名（closed）或已带前缀（status-closed），两种都兼容 -#}
+{% macro status_cls(value, default='status-pending') -%}
+{%- set raw = (value or '')|string|trim -%}
+{%- if not raw -%}{{ default }}{%- elif raw.startswith('status-') -%}{{ raw }}{%- else -%}status-{{ raw }}{%- endif -%}
+{%- endmacro %}

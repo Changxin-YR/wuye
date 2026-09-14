@@ -1,0 +1,233 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}车辆与车位 · {{ app_name }}{% endblock %}
+{% block heading %}车辆与车位{% endblock %}
+{% block content %}
+{% set vehicles = vehicles|default([]) %}
+{% set spaces = spaces|default([]) %}
+{% set houses = houses|default([]) %}
+{% set keyword = keyword|default('') %}
+{% set can_edit = can_edit|default(can('vehicle.write')) %}
+{% set can_parking = can_parking|default(can('parking.write')) %}
+{#- 业主自助申请：resident.self 是业主专属权限点 #}
+{% set can_apply = can_apply|default(false) %}
+{% set page = page|default(1) %}{% set pages = pages|default(1) %}{% set total = total|default(0) %}
+<div class="grid-2 vehicle-grid">
+  <section class="panel">
+    <div class="panel-head">
+      <h3>车辆</h3>
+      {% if can_edit %}
+      <details class="inline-editor">
+        <summary class="icon-link">＋ 登记车辆</summary>
+        <form method="post" action="{{ url_for('vehicles_command', action='create') }}">
+          {{ csrf_field() }}
+          <label>车牌号<span class="label-req" title="必填">*</span><input name="plate" maxlength="12" placeholder="例如 沪A12345" required></label>
+          <label>品牌/型号<input name="brand" maxlength="40" placeholder="选填"></label>
+          <label>所属房屋
+            <select name="house_id">
+              <option value="">请选择房屋</option>
+              {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>车主姓名<input name="owner_name" maxlength="40" placeholder="选填，填写后按姓名匹配人员"></label>
+          <button class="primary full" type="submit">保存</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% if can_apply %}
+    <details class="inline-editor">
+      <summary class="icon-link">＋ 申请车辆登记</summary>
+      <form method="post" action="{{ url_for('vehicles_command', action='apply') }}">
+        {{ csrf_field() }}
+        <label>车牌号<span class="label-req" title="必填">*</span><input name="plate" maxlength="12" placeholder="例如 沪A12345" required></label>
+        <label>品牌/型号<input name="brand" maxlength="40" placeholder="选填"></label>
+        <label>所属房屋
+          <span class="label-req" title="必填">*</span><select name="house_id" required>
+            <option value="">请选择房屋</option>
+            {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+          </select>
+        </label>
+        <button class="primary full" type="submit">提交申请</button>
+        <p class="label-hint">提交后等物业经理审批，通过后车辆才会正式登记。</p>
+      </form>
+    </details>
+    {% endif %}
+    <form class="search-form" method="get" action="{{ url_for('vehicles') }}">
+      <input name="keyword" value="{{ keyword }}" placeholder="按车牌号或房号搜索" maxlength="30">
+      <button class="secondary" type="submit">搜索</button>
+    </form>
+    {% if vehicles %}
+    <div class="list scroll">
+      {% for item in vehicles %}
+      <div class="list-row">
+        <div class="list-main">
+          <b>{{ item.plate }}</b>
+          <em class="status {{ status_cls(item.status_class) }}">{{ item.status_text or '正常' }}</em>
+          <small>
+            {{ item.brand or '未填品牌' }} · {{ item.house_full or '未关联房屋' }}
+            {% if item.owner_name %} · 车主 {{ item.owner_name }}{% endif %}{% if item.space_code %} · 车位 {{ item.space_code }}{% endif %}
+          </small>
+        </div>
+        {% if can_edit %}
+        <details class="inline-editor">
+          <summary class="icon-link">编辑</summary>
+          <form method="post" action="{{ url_for('vehicles_command', action='update') }}">
+            {{ csrf_field() }}
+            <input type="hidden" name="id" value="{{ item.id }}">
+            <label>车牌号<span class="label-req" title="必填">*</span><input name="plate" value="{{ item.plate }}" maxlength="12" required></label>
+            <label>品牌/型号<input name="brand" value="{{ item.brand or '' }}" maxlength="40"></label>
+            <label>所属房屋
+              <select name="house_id">
+                <option value="">不关联房屋</option>
+                {% for house in houses %}<option value="{{ house.id }}" {{ 'selected' if item.house_id == house.id else '' }}>{{ house.full_name or house.label }}</option>{% endfor %}
+              </select>
+            </label>
+            <button class="primary full" type="submit">保存</button>
+          </form>
+        </details>
+        {% if (item.status or 0) == 0 %}
+        <form class="inline-form" method="post" action="{{ url_for('vehicles_command', action='archive') }}" data-confirm="确定归档车辆「{{ item.plate }}」吗？归档后不再显示在默认列表。">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <button class="text-danger" type="submit">归档</button>
+        </form>
+        {% elif (item.status or 0) == 2 %}
+        <form class="inline-form" method="post" action="{{ url_for('vehicles_command', action='review') }}" data-confirm="确定通过「{{ item.plate }}」的登记申请吗？">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <input type="hidden" name="approve" value="1">
+          <button class="primary" type="submit">通过</button>
+        </form>
+        <form class="inline-form" method="post" action="{{ url_for('vehicles_command', action='review') }}" data-confirm="确定驳回「{{ item.plate }}」的登记申请吗？">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <input type="hidden" name="approve" value="0">
+          <button class="text-danger" type="submit">驳回</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% if pages > 1 %}
+    <nav class="pager">
+      {% if page > 1 %}<a class="secondary" href="{{ url_for('vehicles', keyword=keyword or none, page=page-1) }}">上一页</a>{% endif %}
+      <span class="muted">第 {{ page }} / {{ pages }} 页，共 {{ total }} 辆</span>
+      {% if page < pages %}<a class="secondary" href="{{ url_for('vehicles', keyword=keyword or none, page=page+1) }}">下一页</a>{% endif %}
+    </nav>
+    {% endif %}
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🚗</span>
+      <span class="empty-text">还没有登记车辆。</span>
+      {% if can_edit %}
+      <span class="empty-hint">点「＋ 登记车辆」添加车牌与车主。</span>
+      {% elif can_apply %}
+      <span class="empty-hint">点「＋ 申请车辆登记」提交申请，物业审批通过后生效。</span>
+      {% else %}
+      <span class="empty-hint">车辆由物业登记；业主可在自己的页面提交车辆登记申请。</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>车位</h3></div>
+    {% if can_parking %}
+    <details class="inline-editor">
+      <summary class="icon-link">＋ 分配车位</summary>
+      <form method="post" action="{{ url_for('parking_command', action='assign') }}">
+        {{ csrf_field() }}
+        <label>车位编号<span class="label-req" title="必填">*</span><input name="code" maxlength="20" placeholder="例如 A-012" required></label>
+        <label>车位状态
+          <select name="status">
+            <option value="0">空闲</option>
+            <option value="1">占用</option>
+          </select>
+        </label>
+        <label>分配给房屋
+          <select name="house_id">
+            <option value="">暂不分配</option>
+            {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>绑定车辆
+          <select name="vehicle_id">
+            <option value="">不绑定车辆</option>
+            {% for item in vehicles %}<option value="{{ item.id }}">{{ item.plate }}</option>{% endfor %}
+          </select>
+        </label>
+        <button class="primary full" type="submit">分配</button>
+      </form>
+    </details>
+    {% endif %}
+    {% if can_apply %}
+    <details class="inline-editor">
+      <summary class="icon-link">＋ 申请车位</summary>
+      <form method="post" action="{{ url_for('parking_command', action='apply') }}">
+        {{ csrf_field() }}
+        <label>申请房屋
+          <span class="label-req" title="必填">*</span><select name="house_id" required>
+            <option value="">请选择房屋</option>
+            {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>备注<input name="note" maxlength="100" placeholder="例如：家里有两辆车"></label>
+        <button class="primary full" type="submit">提交申请</button>
+        <p class="label-hint">提交后等物业经理审批；通过后物业会指定一个空闲车位分配给你。</p>
+      </form>
+    </details>
+    {% endif %}
+    {% if spaces %}
+    <div class="list scroll">
+      {% for item in spaces %}
+      <div class="list-row">
+        <div class="list-main">
+          <b>{{ item.code }}</b>
+          <em class="status {{ status_cls(item.status_class) }}">{{ item.status_text or ('占用' if item.status == 1 else '空闲') }}</em>
+          <small>
+            {% if item.house_full %} · {{ item.house_full }}{% endif %}
+            {% if item.plate %} · {{ item.plate }}{% endif %}
+          </small>
+        </div>
+        {% if can_parking and item.status == 2 %}
+        <form class="inline-form" method="post" action="{{ url_for('parking_command', action='review') }}">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <input type="hidden" name="approve" value="1">
+          <input name="space_code" maxlength="20" placeholder="分给哪个车位号" required>
+          <button class="primary" type="submit">通过</button>
+        </form>
+        <form class="inline-form" method="post" action="{{ url_for('parking_command', action='review') }}" data-confirm="确定驳回这条车位申请吗？">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <input type="hidden" name="approve" value="0">
+          <button class="text-danger" type="submit">驳回</button>
+        </form>
+        {% elif can_parking and item.status == 1 %}
+        <form class="inline-form" method="post" action="{{ url_for('parking_command', action='release') }}" data-confirm="确定释放车位「{{ item.code }}」吗？">
+          {{ csrf_field() }}
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <button class="text-danger" type="submit">释放</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🅿</span>
+      <span class="empty-text">还没有车位记录。</span>
+      {% if can_parking %}
+      <span class="empty-hint">点「＋ 分配车位」添加车位并绑定房屋；业主提交的申请会以待审批状态出现在这里。</span>
+      {% elif can_apply %}
+      <span class="empty-hint">点「＋ 申请车位」提交申请，物业审批通过后会分配一个空闲车位给你。</span>
+      {% else %}
+      <span class="empty-hint">车位由物业建档与分配。</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

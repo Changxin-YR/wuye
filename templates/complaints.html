@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}投诉 · {{ app_name }}{% endblock %}
+{% block heading %}投诉{% endblock %}
+{% block content %}
+{% set items = items|default([]) %}
+{% set houses = houses|default([]) %}
+{% set status_counts = status_counts|default([]) %}
+{% set status_filter = status_filter|default('') %}
+{% set keyword = keyword|default('') %}
+{% set page = page|default(1) %}{% set pages = pages|default(1) %}{% set total = total|default(0) %}
+<section class="toolbar">
+  <div class="filters">
+    <a class="pill {{ 'selected' if not status_filter else '' }}"
+       href="{{ url_for('complaints', keyword=keyword or none) }}">全部</a>
+    {% for item in status_counts %}
+    <a class="pill {{ 'selected' if status_filter|string == item.status|string else '' }}"
+       href="{{ url_for('complaints', status=item.status, keyword=keyword or none) }}">{{ item.text }} {{ item.count }}</a>
+    {% endfor %}
+  </div>
+  <div class="toolbar-actions">
+    <form class="search-form" method="get" action="{{ url_for('complaints') }}">
+      {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+      <input name="keyword" value="{{ keyword }}" placeholder="按投诉单号、房号或内容搜索" maxlength="40">
+      <button class="secondary" type="submit">搜索</button>
+    </form>
+  </div>
+</section>
+
+{% if can('complaint.create') %}
+<section class="panel form-panel">
+  <div class="panel-head"><h3>登记投诉</h3></div>
+  <form method="post" action="{{ url_for('complaints') }}">
+    {{ csrf_field() }}
+    <div class="form-grid">
+      <label class="span-2">房屋
+        <span class="label-req" title="必填">*</span><select name="house_id" required>
+          <option value="">请选择房屋</option>
+          {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>投诉类别
+        <select name="category">
+          {% for option in category_options|default([]) %}
+          <option value="{{ option.value }}">{{ option.text }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>联系电话<input name="contact_phone" maxlength="20" placeholder="选填"></label>
+      <label class="span-2">投诉内容
+        <span class="label-req" title="必填">*</span><textarea name="content" rows="3" maxlength="1000" placeholder="例如：楼上装修噪音很大，晚上十点还在施工" required></textarea>
+      </label>
+    </div>
+    <div class="form-actions"><button class="primary" type="submit">提交投诉</button></div>
+  </form>
+</section>
+{% endif %}
+
+<section class="panel table-panel">
+  {% if items %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>投诉单号</th><th>房屋</th><th>内容</th><th>投诉人</th><th>处理人</th><th>状态</th><th>登记时间</th></tr></thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td><a class="order-link" href="{{ url_for('complaint_detail', complaint_id=item.id) }}">{{ item.no }}</a></td>
+          <td>{{ item.house_full }}</td>
+          <td class="detail-cell">{{ item.content|truncate(60) }}</td>
+          <td>{{ item.reporter_name or '—' }}</td>
+          <td>{{ item.handler_name or '未分配' }}</td>
+          <td><span class="status {{ status_cls(item.status_class or 'complaint') }}">{{ item.status_text }}</span></td>
+          <td class="muted">{{ item.created_at|cn_time }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="pager">
+    {% if page > 1 %}<a class="secondary" href="{{ url_for('complaints', status=status_filter or none, keyword=keyword or none, page=page-1) }}">上一页</a>{% endif %}
+    <span class="muted">第 {{ page }} / {{ pages }} 页，共 {{ total }} 条</span>
+    {% if page < pages %}<a class="secondary" href="{{ url_for('complaints', status=status_filter or none, keyword=keyword or none, page=page+1) }}">下一页</a>{% endif %}
+  </nav>
+  {% else %}<p class="muted pager-note">共 {{ total }} 条</p>{% endif %}
+  {% else %}
+  <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🔍</span>
+      <span class="empty-text">没有符合条件的投诉。</span>
+      <span class="empty-hint">换个状态或关键词试试。</span>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

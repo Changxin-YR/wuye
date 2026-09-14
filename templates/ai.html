@@ -1,1 +1,91 @@
-{% extends 'base.html' %}{% block heading %}AI Agent{% endblock %}{% block content %}<section class="panel ai-panel"><div class="ai-intro"><span class="ai-mark">AI</span><div><h2>美家办事 Agent</h2><p id="ai-status" class="muted">{{ '已填写服务配置，连接状态待检测。' if ai_configured else '尚未配置AI服务，请联系管理员。' }}</p></div></div><p class="muted">Agent 只继承当前登录账号的实时权限和数据范围：R0 查询只读，R1 普通可恢复操作可自动执行，R2 重要关系变更按系统策略自动或确认，R3 删除、财务、角色权限等高风险操作必须人工确认。目标不唯一时会先询问；所有写操作仍由后台业务服务鉴权、校验并审计。发送到模型的业务上下文会做最小化和脱敏处理。</p><div class="toolbar"><button id="new-chat" class="secondary" type="button">新对话</button>{% if current_user.role == 0 %}<button id="check-ai" class="secondary" type="button">检测连接及模型响应</button>{% endif %}</div><div id="chat" class="chat" aria-live="polite"><div class="chat-bubble assistant">你好，可以让我查询进度或办理业务。例如：帮我提交厨房漏水报修。缺少信息时我会先询问。</div></div><form id="chat-form" class="chat-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input id="chat-input" name="message" maxlength="2000" placeholder="例如：我的报修现在是什么状态？" autocomplete="off" required><button class="primary" id="send-chat">发送</button></form><div id="agent-actions" aria-live="polite"></div><p class="muted">操作卡片10分钟有效；刷新后仍可查看执行回执和待确认项。当前页面保留本次对话；刷新后开始新对话。AI服务不可用时仍可正常报修。</p></section>{% endblock %}
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field with context %}
+{% block title %}AI 助手 · {{ app_name }}{% endblock %}
+{% block heading %}AI 助手{% endblock %}
+{% block head_extra %}
+<meta name="csrf-token" content="{{ csrf_token if csrf_token is string else csrf_token() }}">
+{% endblock %}
+{% block content %}
+{% set sessions = sessions|default([]) %}
+{% set messages = messages|default([]) %}
+{% set current_session = current_session|default(active_session|default(none)) %}
+{% set agent_ready = agent_ready|default(true) %}
+{% set stream_url = stream_url|default('/ai/chat') %}
+{% set new_session_url = new_session_url|default('/ai/sessions') %}
+<div class="ai-layout">
+  <aside class="panel ai-side">
+    <div class="panel-head">
+      <h3>我的对话</h3>
+      <form method="post" action="{{ new_session_url }}">
+        {{ csrf_field() }}
+        <button class="secondary" type="submit">新对话</button>
+      </form>
+    </div>
+    {% if sessions %}
+      <div class="ai-session-list">
+        {% for item in sessions %}
+        <a class="ai-session {{ 'active' if current_session and current_session.id == item.id else '' }}" href="{{ ai_page_url(session=item.id) }}">
+          <b>{{ item.title or '新对话' }}</b>
+          <small>{{ item.updated_at|cn_time }}{% if item.message_count %} · {{ item.message_count }} 条{% endif %}</small>
+        </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty">
+      <span class="empty-icon" aria-hidden="true">💬</span>
+      <span class="empty-text">还没有对话，点「新对话」开始。</span>
+      <span class="empty-hint">也可以直接问「我报修的工单现在到哪一步了」。</span>
+    </div>
+    {% endif %}
+  </aside>
+
+  <section class="panel ai-main">
+    {# 身份条：演示时用来对照「同一句话、不同人、结果不同」 #}
+    <div class="ai-identity">
+      <span class="ai-mark">AI</span>
+      <div class="ai-identity-text">
+        <b>当前登录：{{ identity_name or current_user.real_name or current_user.name or current_user.username }}</b>
+        <small>角色 {{ current_user.role_names|join('、') if current_user.role_names else '—' }} · 能看到 {{ scope_text or current_user.scope_text or current_user.data_scope_text or '—' }}</small>
+      </div>
+      <p class="muted ai-identity-note">助手只按这个身份查询和办理，换个人登录，同一句话的结果会不一样。</p>
+    </div>
+
+    {% if not agent_ready %}
+    <div class="flash">助手暂时连不上，稍后再试；页面上的报修、派单等功能不受影响。</div>
+    {% endif %}
+
+    <div id="chat" class="chat" aria-live="polite"
+         data-session="{{ current_session.id if current_session else '' }}"
+         data-endpoint="{{ stream_url }}"
+         data-csrf="{{ csrf_token }}"
+         data-actions-url="{{ ai_actions_url() }}"
+         data-confirm-url="{{ ai_action_confirm_url() }}"
+         data-cancel-url="{{ ai_action_cancel_url() }}">
+      {% if messages %}
+        {% for message in messages %}
+          {% if message.role == 'user' %}
+          <div class="chat-bubble user" data-created="{{ message.created_at|cn_time }}">{{ message.content }}</div>
+          {% elif message.role == 'assistant' %}
+          <div class="chat-bubble assistant" data-created="{{ message.created_at|cn_time }}">{{ message.content }}</div>
+          {% else %}
+          <div class="chat-note">{{ message.role_text or message.role }}：{{ message.content }}</div>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <div class="chat-bubble assistant">你好，我是美家办事助手。你可以问我「我报修的漏水工单现在到哪一步了」，也可以直接说「1 栋 101 的厨房漏水，帮我报修」。</div>
+      {% endif %}
+    </div>
+
+    <form id="chat-form" class="chat-form" autocomplete="off">
+      {{ csrf_field() }}
+      <input id="chat-input" name="q" maxlength="2000" placeholder="例如：3 栋 502 的卫生间漏水，帮我报修" required>
+      <button class="primary" id="chat-send" type="submit">发送</button>
+    </form>
+    <p class="muted chat-hint">助手的每一次改动都会校验权限并留下操作记录，可在「审计日志」里查看。答复较慢时可继续用页面办理。</p>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/ai.js') }}"></script>
+{% endblock %}

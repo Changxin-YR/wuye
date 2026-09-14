@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}访客 · {{ app_name }}{% endblock %}
+{% block heading %}访客{% endblock %}
+{% block content %}
+{% set items = items|default([]) %}
+{% set houses = houses|default([]) %}
+{% set keyword = keyword|default('') %}
+{% set status_filter = status_filter|default('') %}
+{% set page = page|default(1) %}{% set pages = pages|default(1) %}{% set total = total|default(0) %}
+<section class="toolbar">
+  <div class="filters">
+    <a class="pill {{ 'selected' if not status_filter else '' }}" href="{{ url_for('visitors', keyword=keyword or none) }}">全部</a>
+    {% for item in status_options|default([]) %}
+    <a class="pill {{ 'selected' if status_filter|string == item.value|string else '' }}"
+       href="{{ url_for('visitors', status=item.value, keyword=keyword or none) }}">{{ item.text }}</a>
+    {% endfor %}
+  </div>
+  <form class="search-form" method="get" action="{{ url_for('visitors') }}">
+    {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+    <input name="keyword" value="{{ keyword }}" placeholder="按访客姓名、手机号或房号搜索" maxlength="40">
+    <button class="secondary" type="submit">搜索</button>
+  </form>
+</section>
+
+{% if can('visitor.write') %}
+<section class="panel form-panel">
+  <div class="panel-head"><h3>登记访客</h3></div>
+  <form method="post" action="{{ url_for('visitors') }}">
+    {{ csrf_field() }}
+    <div class="form-grid">
+      <label>访客姓名<span class="label-req" title="必填">*</span><input name="name" maxlength="40" required></label>
+      <label>访客手机号<span class="label-req" title="必填">*</span><input name="phone" maxlength="20" required></label>
+      <label>到访房屋
+        <span class="label-req" title="必填">*</span><select name="house_id" required>
+          <option value="">请选择房屋</option>
+          {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>到访时间<input name="visit_at" type="datetime-local">
+        <small class="label-hint">不填就按「现在」登记；要指定时间，点输入框里的日历图标选日期和时间</small>
+      </label>
+      <label class="span-2">来访事由<input name="purpose" maxlength="60" placeholder="例如：走亲访友 / 送快递 / 上门维修"></label>
+    </div>
+    <div class="form-actions"><button class="primary" type="submit">登记访客</button></div>
+  </form>
+</section>
+{% endif %}
+
+<section class="panel table-panel">
+  {% if items %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>访客</th><th>手机号</th><th>到访房屋</th><th>到访时间</th><th>事由</th><th>接待人</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td>{{ item.name }}</td>
+          <td>{{ item.phone }}</td>
+          <td>{{ item.house_full }}</td>
+          <td class="muted">{{ item.visit_at|cn_time }}</td>
+          <td>{{ item.purpose or '—' }}</td>
+          <td>{{ item.operator_name or '—' }}</td>
+          <td><span class="status {{ status_cls(item.status_class or 'visitor') }}">{{ item.status_text }}</span></td>
+          <td>
+            <div class="row-actions">
+              {% if item.status == 0 and can('visitor.write') %}
+              <form class="inline-form" method="post" action="{{ url_for('visitors_command', visitor_id=item.id, action='check-in') }}">
+                {{ csrf_field() }}
+                <button class="text-link" type="submit">进入</button>
+              </form>
+              {% endif %}
+              {% if item.status == 1 and can('visitor.write') %}
+              <form class="inline-form" method="post" action="{{ url_for('visitors_command', visitor_id=item.id, action='check-out') }}">
+                {{ csrf_field() }}
+                <button class="text-link" type="submit">离开</button>
+              </form>
+              {% endif %}
+              {% if item.status in (0, 1) and can('visitor.write') %}
+              <form class="inline-form" method="post" action="{{ url_for('visitors_command', visitor_id=item.id, action='cancel') }}" data-confirm="确定取消这位访客的登记吗？">
+                {{ csrf_field() }}
+                <button class="text-danger" type="submit">取消</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="pager">
+    {% if page > 1 %}<a class="secondary" href="{{ url_for('visitors', status=status_filter or none, keyword=keyword or none, page=page-1) }}">上一页</a>{% endif %}
+    <span class="muted">第 {{ page }} / {{ pages }} 页，共 {{ total }} 条</span>
+    {% if page < pages %}<a class="secondary" href="{{ url_for('visitors', status=status_filter or none, keyword=keyword or none, page=page+1) }}">下一页</a>{% endif %}
+  </nav>
+  {% else %}<p class="muted pager-note">共 {{ total }} 条</p>{% endif %}
+  {% else %}
+  <div class="empty">还没有访客登记。</div>
+  {% endif %}
+</section>
+{% endblock %}

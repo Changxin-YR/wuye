@@ -1,1 +1,23 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>操作提示 · 美家物业</title><link rel="stylesheet" href="{{ url_for('static',filename='css/style.css') }}"></head><body><main class="auth-page"><section class="auth-card"><span class="eyebrow">操作提示 · {{ status }}</span><h1>本次操作未完成</h1><p>{{ message }}</p><a class="primary" href="{{ url_for('index') }}">返回工作台</a><p class="muted">请返回原页面检查信息，刷新后重试。</p></section></main></body></html>
+{% extends 'base.html' %}
+{% block title %}{{ code }} · {{ title or app_name }}{% endblock %}
+{% block heading %}{{ title or '出错了' }}{% endblock %}
+{% set code = code|default(500) %}
+{% set title = title|default('') %}
+{% set message = message|default('') %}
+{% set body %}
+<div class="empty error-page">
+  <strong class="error-code">{{ code }}</strong>
+  <p>{{ message }}</p>
+  <a class="primary" href="{{ back_url or url_for('dashboard') }}">返回工作台</a>
+</div>
+{% endset %}
+{% block content %}{{ body }}{% endblock %}
+{% block auth_content %}
+<main class="auth-page">
+  <div class="panel auth-card">
+    <strong class="error-code">{{ code }}</strong>
+    <p>{{ message }}</p>
+    <a class="primary full" href="{{ back_url or url_for('login') }}">去登录</a>
+  </div>
+</main>
+{% endblock %}

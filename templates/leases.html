@@ -1,0 +1,117 @@
+{% extends 'base.html' %}
+
+{% from '_macros.html' import csrf_field, status_cls with context %}
+{% block title %}租赁 · {{ app_name }}{% endblock %}
+{% block heading %}租赁{% endblock %}
+{% block content %}
+{% set items = items|default([]) %}
+{% set houses = houses|default([]) %}
+{% set persons = persons|default([]) %}
+{% set can_edit = can_edit|default(can('lease.write')) %}
+{% set keyword = keyword|default('') %}
+{% set page = page|default(1) %}{% set pages = pages|default(1) %}{% set total = total|default(0) %}
+<div class="grid-2 lease-grid">
+  <section class="panel table-panel">
+    <div class="panel-head table-head">
+      <h3>在租列表</h3>
+      <form class="search-form" method="get" action="{{ url_for('leases') }}">
+        <input name="keyword" value="{{ keyword }}" placeholder="按房号、租户姓名或手机号搜索" maxlength="40">
+        <button class="secondary" type="submit">搜索</button>
+      </form>
+    </div>
+    {% if items %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>房屋</th><th>承租人</th><th>关系</th><th>月租金</th><th>入住时间</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+          {% for item in items %}
+          <tr>
+            <td>{{ item.house_text }}</td>
+            <td>{{ item.person_name }}{% if item.phone %}<small class="muted"> {{ item.phone }}</small>{% endif %}</td>
+            <td>{{ item.relation_text or '—' }}</td>
+            <td>{% set rent_show = item.rent_text or item.rent %}{% if rent_show %}{{ rent_show }} 元{% else %}—{% endif %}</td>
+            <td class="muted">{{ item.start_at|cn_time }}</td>
+            <td><span class="status {{ status_cls(item.status_class or 'working') }}">{{ item.status_text or '在租' }}</span></td>
+            <td>
+              {% if can_edit and (item.status or 'active') == 'active' %}
+              <form class="inline-form" method="post" action="{{ url_for('leases_command', action='check-out') }}" data-confirm="确定给 {{ item.person_name }} 办理退租吗？">
+                {{ csrf_field() }}
+                <input type="hidden" name="relation_id" value="{{ item.id }}">
+                <input type="hidden" name="reason" value="页面办理退租">
+                <button class="text-danger" type="submit">办退租</button>
+              </form>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if pages > 1 %}
+    <nav class="pager">
+      {% if page > 1 %}<a class="secondary" href="{{ url_for('leases', keyword=keyword or none, page=page-1) }}">上一页</a>{% endif %}
+      <span class="muted">第 {{ page }} / {{ pages }} 页，共 {{ total }} 条</span>
+      {% if page < pages %}<a class="secondary" href="{{ url_for('leases', keyword=keyword or none, page=page+1) }}">下一页</a>{% endif %}
+    </nav>
+    {% else %}<p class="muted pager-note">共 {{ total }} 条</p>{% endif %}
+    {% else %}
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">🔑</span>
+      <span class="empty-text">还没有在租记录。</span>
+      <span class="empty-hint">用右侧「办理入住」登记租户。</span>
+    </div>
+    {% endif %}
+  </section>
+
+  <div class="stack">
+    {% if can_edit %}
+    <section class="panel">
+      <div class="panel-head"><h3>办理入住</h3></div>
+      <p class="muted">把房屋和承租人关联起来，登记为租户（同一房屋同一人只能有一条有效关系）。</p>
+      <form method="post" action="{{ url_for('leases_command', action='check-in') }}">
+        {{ csrf_field() }}
+        <div class="form-grid">
+          <label class="span-2">房屋
+            <span class="label-req" title="必填">*</span><select name="house_id" required>
+              <option value="">请选择房屋</option>
+              {% for house in houses %}<option value="{{ house.id }}">{{ house.full_name or house.label }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>承租人
+            {% if persons %}
+            <select name="person_id" required>
+              <option value="">请选择人员</option>
+              {% for item in persons %}<option value="{{ item.id }}">{{ item.name }} {{ item.phone }}</option>{% endfor %}
+            </select>
+            {% else %}
+            <input name="person_name" maxlength="40" placeholder="承租人姓名" required>
+            {% endif %}
+          </label>
+          <label>承租人手机号<input name="phone" maxlength="20" placeholder="选填"></label>
+          <label>月租金（元）<input name="rent" type="number" step="0.01" min="0" placeholder="选填"></label>
+          <label>入住时间<input name="start_at" type="date"></label>
+          <label>备注<input name="note" maxlength="120" placeholder="选填"></label>
+        </div>
+        <div class="form-actions"><button class="primary" type="submit">办理入住</button></div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h3>办理退租</h3></div>
+      <form method="post" action="{{ url_for('leases_command', action='check-out') }}">
+        {{ csrf_field() }}
+        <label>选择在租记录
+          <span class="label-req" title="必填">*</span><select name="relation_id" required>
+            <option value="">请选择承租人</option>
+            {% for item in items %}<option value="{{ item.id }}">{{ item.house_text }} · {{ item.person_name }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>退租原因（必填）<span class="label-req" title="必填">*</span><input name="reason" maxlength="120" placeholder="例如：租约到期不再续租" required></label>
+        <label>退租时间<input name="end_at" type="date"></label>
+        <div class="form-actions"><button class="secondary" type="submit">办理退租</button></div>
+      </form>
+    </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
