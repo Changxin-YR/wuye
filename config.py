@@ -99,6 +99,10 @@ class Config:
         self.MAX_CONTENT_LENGTH = int(_raw("MAX_CONTENT_MB", "8") or 8) * 1024 * 1024
         self.PAGE_SIZE = int(_raw("PAGE_SIZE", "20") or 20)
 
+        # 登录页是否展示「演示账号」区块（账号 + 统一演示口令）。
+        # 演示站默认开；真实部署设 DEMO_LOGIN_HINT=0，登录页就回到只有账号/密码输入框的形态。
+        self.DEMO_LOGIN_HINT = _as_bool(os.getenv("DEMO_LOGIN_HINT"), default=True)
+
         if overrides:
             for key, value in overrides.items():
                 if key == "DATABASE_URL" and value:
@@ -135,6 +139,7 @@ class Config:
             "MAX_CONTENT_LENGTH": self.MAX_CONTENT_LENGTH,
             "PAGE_SIZE": self.PAGE_SIZE,
             "UPLOAD_FOLDER": self.UPLOAD_FOLDER,
+            "DEMO_LOGIN_HINT": self.DEMO_LOGIN_HINT,
             "AI_ENV": self.ai_env(),
         }
 

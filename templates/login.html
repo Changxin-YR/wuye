@@ -5,25 +5,44 @@
 {% block auth_content %}
 {% set error = error|default(none) %}
 {% set next = next|default('') %}
+{% set demo = demo_accounts|default([], true) %}
 <main class="auth-page">
   <form class="panel auth-card" method="post" action="{{ url_for('login') }}">
     <div class="brand auth-brand">
       <span class="brand-mark">美</span>
       <span><b>{{ app_name }}</b><small>社区服务工作台</small></span>
     </div>
-    <h1>账号登录</h1>
-    <p class="muted">请使用物业给你的账号登录。</p>
+    <div class="auth-head">
+      <h1>账号登录</h1>
+      <p class="muted">请使用物业给你的账号登录</p>
+    </div>
     {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
     {{ csrf_field() }}
     <input type="hidden" name="next" value="{{ next or '' }}">
-    <label>用户名
-      <span class="label-req" title="必填">*</span><input name="username" autocomplete="username" autofocus required>
+    <label><span class="label-text">账号<span class="label-req" title="必填">*</span></span>
+      <input name="username" value="{{ username|default('', true) or (demo[0].username if demo else '') }}" autocomplete="username" autofocus required>
     </label>
-    <label>密码
-      <span class="label-req" title="必填">*</span><input name="password" type="password" autocomplete="current-password" required>
+    <label><span class="label-text">密码<span class="label-req" title="必填">*</span></span>
+      <input name="password" type="password" value="{{ demo[0].password if demo and not error else '' }}" autocomplete="current-password" required>
     </label>
     <button class="primary full" type="submit">登录</button>
-    <p class="muted auth-foot">演示账号：admin（管理员）/ manager01（物业经理）/ service01（客服）/ engineer01（维修）/ finance01（会计）/ owner01（业主）</p>
+    {% if demo %}
+    <section class="demo-box" aria-label="演示账号">
+      <div class="demo-box-head">
+        <b>演示账号</b><span>点击任意一行，自动填入</span>
+      </div>
+      <ul class="demo-list">
+        {% for item in demo %}
+        <li>
+          <button type="button" class="demo-row" data-demo-username="{{ item.username }}" data-demo-password="{{ item.password }}">
+            <span class="demo-account"><b>{{ item.username }}</b><small>{% if item.name and item.name != item.role %}{{ item.name }} · {% endif %}{{ item.role }}</small></span>
+            <code class="demo-password">{{ item.password }}</code>
+          </button>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
   </form>
 </main>
 {% endblock %}

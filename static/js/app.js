@@ -49,4 +49,22 @@
   window.setTimeout(() => {
     document.querySelectorAll('.flash').forEach(node => node.classList.add('fade'));
   }, 4000);
+
+  // 登录页「演示账号」：点一行把账号与口令填进登录表单
+  // （纯前端便利，不做任何授权判断；能不能登录仍然由后端校验）
+  document.querySelectorAll('.demo-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const form = row.closest('form');
+      if (!form) return;
+      const account = form.querySelector('input[name=username]');
+      const secret = form.querySelector('input[name=password]');
+      if (account) account.value = row.dataset.demoUsername || '';
+      if (secret) secret.value = row.dataset.demoPassword || '';
+      document.querySelectorAll('.demo-row').forEach(other => {
+        other.classList.toggle('is-picked', other === row);
+      });
+      const submit = form.querySelector('button[type="submit"]');
+      if (submit) submit.focus();
+    });
+  });
 })();

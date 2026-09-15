@@ -260,9 +260,21 @@ def pagination(page=1, page_size=20, total=12):
     return {"page": page, "page_size": page_size, "pages": pages, "total": total}
 
 
+#: 登录页「演示账号」桩数据（真实来源：seed_demo.ACCOUNT_SPECS + seed_demo.DEMO_PASSWORD）
+DEMO_LOGIN_ACCOUNTS = [
+    {"username": "admin", "name": "系统管理员", "role": "系统管理员", "password": "Demo-only-292!"},
+    {"username": "manager01", "name": "王经理", "role": "物业经理", "password": "Demo-only-292!"},
+    {"username": "service01", "name": "陈客服", "role": "客服", "password": "Demo-only-292!"},
+    {"username": "engineer01", "name": "黄磊", "role": "工程维修", "password": "Demo-only-292!"},
+    {"username": "finance01", "name": "周会计", "role": "财务", "password": "Demo-only-292!"},
+    {"username": "owner01", "name": "张伟", "role": "业主", "password": "Demo-only-292!"},
+]
+
+
 def case_login(role="owner"):
     context = base_context("owner")
-    context.update({"current_user": None, "nav": [], "error": "用户名或密码不正确", "next": "/orders"})
+    context.update({"current_user": None, "nav": [], "error": "用户名或密码不正确", "next": "/orders",
+                    "demo_accounts": DEMO_LOGIN_ACCOUNTS})
     return context
 
 

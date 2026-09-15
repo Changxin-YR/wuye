@@ -196,6 +196,42 @@ def page_of(result: dict) -> dict:
 # --------------------------------------------------------------------------
 # 视图
 # --------------------------------------------------------------------------
+
+#: 登录页「演示账号」区块的账号顺序（与 docs/DEMO_SCRIPT.md 的演示动线一致）
+DEMO_LOGIN_USERNAMES = ("admin", "manager01", "service01", "engineer01", "finance01", "owner01")
+
+
+def demo_login_accounts() -> list[dict[str, str]]:
+    """登录页要展示的演示账号（账号 + 统一演示口令）。
+
+    账号与口令只在 ``seed_demo`` 定义一次，这里只做「挑选 + 角色代码转中文名」，
+    避免口令在模板里再抄一份、两处漂移；取不到就返回空列表，登录页自动隐藏该区块
+    （登录页不能为一个演示提示而 500）。真实部署可用 ``DEMO_LOGIN_HINT=0`` 关掉。
+    """
+    if not current_app.config.get("DEMO_LOGIN_HINT", True):
+        return []
+    try:
+        from seed_demo import ACCOUNT_SPECS, DEMO_PASSWORD
+    except Exception:  # noqa: BLE001 - 演示提示缺失不应影响登录
+        log.warning("演示账号提示不可用", exc_info=True)
+        return []
+    specs = {spec["username"]: spec for spec in ACCOUNT_SPECS}
+    accounts: list[dict[str, str]] = []
+    for username in DEMO_LOGIN_USERNAMES:
+        spec = specs.get(username)
+        if spec is None:
+            continue
+        accounts.append(
+            {
+                "username": username,
+                "name": spec["real_name"],
+                "role": permissions.ROLE_NAMES.get(spec["role"], spec["role"]),
+                "password": DEMO_PASSWORD,
+            }
+        )
+    return accounts
+
+
 def view_login():
     """登录：哈希校验 + CSRF；成功后把 user_id / auth_version 写进 session。"""
     next_url = _text(request.values.get("next"))
@@ -209,7 +245,13 @@ def view_login():
         ).scalars().first()
         if user is None or not user.active or not check_password_hash(user.password_hash or "", password):
             log.info("登录失败：%s", username)
-            return render_template("login.html", error="用户名或密码不正确", next=next_url, username=username)
+            return render_template(
+                "login.html",
+                error="用户名或密码不正确",
+                next=next_url,
+                username=username,
+                demo_accounts=demo_login_accounts(),
+            )
         session.clear()
         session[SESSION_USER_ID] = user.id
         session[SESSION_AUTH_VERSION] = int(user.auth_version)
@@ -219,7 +261,13 @@ def view_login():
         return redirect(_safe_next(next_url, url_for("dashboard")))
     if policy.user is not None:
         return redirect(_safe_next(next_url, url_for("dashboard")))
-    return render_template("login.html", error=None, next=next_url, username="")
+    return render_template(
+        "login.html",
+        error=None,
+        next=next_url,
+        username="",
+        demo_accounts=demo_login_accounts(),
+    )
 
 
 def view_logout():
