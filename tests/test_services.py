@@ -70,7 +70,7 @@ class OrderLifecycleTests(DbTestCase):
         self.assertEqual(result["status_text"], "待派单")
         self.assertEqual(result["urgency"], 1)
         self.assertEqual(result["category"], "water")
-        self.assertEqual(result["house_full"], "美家花园1栋1单元101")
+        self.assertEqual(result["house_full"], "云邻花园1栋1单元101")
         self.assertEqual(result["owner_id"], owner.user_id)
         self.assertTrue(result["no"].startswith("WO"))
         self.assertEqual(result["contact_phone"], "13900000001")  # 空格会被清理
@@ -256,7 +256,7 @@ class MasterDataTests(DbTestCase):
             services.create_house(manager, building="1栋", unit="1", room="101", area=88)
         self.assertIn("已经存在", ctx.exception.message)
         created = services.create_house(manager, building="2栋", unit="2", room="202", area=120)
-        self.assertEqual(created["full_name"], "美家花园2栋2单元202")
+        self.assertEqual(created["full_name"], "云邻花园2栋2单元202")
         with self.assertRaises(ServiceError) as ctx:
             services.create_house(manager, building_id=self.fx["b3"].id, unit="1", room="202")
         self.assertIn("没有找到", ctx.exception.message)  # 隔壁小区的楼栋不在范围内
@@ -379,7 +379,7 @@ class MasterDataTests(DbTestCase):
     def test_house_resolver_accepts_names(self):
         admin = self.actor("admin")
         self.assertEqual(services.resolve_house(admin, "1栋1单元101").id, self.house("h1").id)
-        self.assertEqual(services.resolve_house(admin, "美家花园1栋1单元101").id, self.house("h1").id)
+        self.assertEqual(services.resolve_house(admin, "云邻花园1栋1单元101").id, self.house("h1").id)
         self.assertEqual(services.resolve_house(admin, "2栋101").id, self.house("h5").id)  # 省略单元号
         with self.assertRaises(ServiceError) as ctx:
             services.resolve_house(admin, "1栋101")  # 1单元与2单元都有 101 → 需要消歧

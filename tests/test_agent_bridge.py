@@ -98,7 +98,7 @@ class TranslatorTestCase(unittest.TestCase):
                 "ok": True,
                 "requires_confirmation": {
                     "action_id": 12, "tool": "delete_house", "risk": "R3",
-                    "preview": "删除房屋：美家花园 1栋1单元101",
+                    "preview": "删除房屋：云邻花园 1栋1单元101",
                     "expires_at": "2026-09-12T10:00:00",
                 },
                 "message": "这项操作需要用户确认。",

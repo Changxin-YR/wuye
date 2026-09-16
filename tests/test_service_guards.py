@@ -422,7 +422,7 @@ class UnitSyncTests(DbTestCase):
         unit = self.session.get(models.Unit, house.unit_id)
         self.assertEqual((unit.name, unit.building_id), ("9", self.fx["b2"].id))
         self.assertEqual(house.unit_name, "9")
-        self.assertEqual(created["full_name"], "美家花园2栋9单元901")
+        self.assertEqual(created["full_name"], "云邻花园2栋9单元901")
 
     def test_update_house_resyncs_unit(self):
         service = self.actor("service01")

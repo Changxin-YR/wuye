@@ -1400,7 +1400,7 @@ def get_bill(actor, bill_id):
     detail = {
         "id": row.id, "no": row.no, "house_id": row.house_id,
         "house_text": house.house_text if house is not None else f"房屋#{row.house_id}",
-        # 标题与工单/投诉详情同一口径用 full_name（美家花园1栋1单元201）；
+        # 标题与工单/投诉详情同一口径用 full_name（云邻花园1栋1单元201）；
         # house_text 里的单元名是裸数字（“1栋 1 201”），放在标题里不好读
         "house_full": house.full_name if house is not None else f"房屋#{row.house_id}",
         "person_name": person.name if person is not None else "",

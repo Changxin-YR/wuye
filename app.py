@@ -623,7 +623,7 @@ def register_jinja(app: Flask) -> None:
             user = policy.user
             identity = policy.identity()
             return {
-                "app_name": app.config.get("APP_NAME", "美家物业"),
+                "app_name": app.config.get("APP_NAME", "云邻AI智脑"),
                 "current_user": user,
                 "identity": Row(identity) if user else None,
                 "nav": build_nav(policy) if user else [],
@@ -634,7 +634,7 @@ def register_jinja(app: Flask) -> None:
         except Exception:  # 数据库不可用时也要能渲染错误页
             log.warning("渲染上下文失败", exc_info=True)
             return {
-                "app_name": app.config.get("APP_NAME", "美家物业"),
+                "app_name": app.config.get("APP_NAME", "云邻AI智脑"),
                 "current_user": None,
                 "identity": None,
                 "nav": [],

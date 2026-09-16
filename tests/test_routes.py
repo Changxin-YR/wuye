@@ -195,7 +195,7 @@ class PageRenderTests(DbTestCase):
         response = self.client("manager01", app=app).get("/houses")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("美家花园", html)
+        self.assertIn("云邻花园", html)
         # 三级联动：未选小区时房屋区是空的，选了小区+楼栋才出房屋列表
         response = self.client("manager01", app=app).get(
             f"/houses?community={self.fx['c1'].id}&building={self.fx['b1'].id}"
@@ -244,8 +244,8 @@ class PageRenderTests(DbTestCase):
         response = self.client("owner01", app=app).get("/orders/new")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("美家花园1栋1单元101", html)
-        self.assertNotIn("美家花园1栋1单元201", html)  # 只能给自己家报修
+        self.assertIn("云邻花园1栋1单元101", html)
+        self.assertNotIn("云邻花园1栋1单元201", html)  # 只能给自己家报修
 
     def test_order_detail_and_actions(self):
         app = make_app()

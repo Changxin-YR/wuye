@@ -269,7 +269,7 @@ ctx.systemPrompt.variable('cwd',      (context) => context.agent?.session.header
     includeHarnessIdentity: false        # 去掉 “coding agent powered by DeepSeek Harness”
     includeRuntimeContext: false         # 不注入运行时快照（沙箱/审批政策等噪音）
     personaPrefix: |                     # ← agent/config/wuye_agent.md 全文内联
-      你是「美家物业」的智能助手，帮助物业工作人员和业主用自然语言完成日常工作。
+      你是「云邻AI智脑」的智能助手，帮助物业工作人员和业主用自然语言完成日常工作。
       ...
     personaSuffix: ''
 ```
@@ -287,7 +287,7 @@ ctx.systemPrompt.variable('cwd',      (context) => context.agent?.session.header
     includeHarnessIdentity: false
     includeRuntimeContext: false
     personaPrefix: |-
-      你是「美家物业」的智能助手，帮助物业工作人员和业主用自然语言完成日常工作。
+      你是「云邻AI智脑」的智能助手，帮助物业工作人员和业主用自然语言完成日常工作。
       ...
     personaSuffix: ''
 ```
@@ -300,7 +300,7 @@ ctx.systemPrompt.variable('cwd',      (context) => context.agent?.session.header
   "data": {
     "message": {
       "role": "system",
-      "content": [{"type": "text", "text": "你是「美家物业」的智能助手，帮助物业工作人员和业主用自然语言完成日常工作。\n\n## 你是谁\n..."}],
+      "content": [{"type": "text", "text": "你是「云邻AI智脑」的智能助手，帮助物业工作人员和业主用自然语言完成日常工作。\n\n## 你是谁\n..."}],
       "source": {"kind": "plugin", "plugin": "@deepseek-ai/dsh-system-prompt"}
     }
   }
@@ -996,7 +996,7 @@ TOOLS(3): ['mcp__wuye__child_info', 'mcp__wuye__echo', 'mcp__wuye__env_probe']
     "data": {"turn": 1, "step": 1, "message": {
       "role": "system",
       "content": [{"type": "text",
-        "text": "你是「美家物业」的智能助手，帮助物业工作人员和业主用自然语言完成日常工作。\n\n## 你是谁\n\n- 你服务的是**当前登录用户**。…"}],
+        "text": "你是「云邻AI智脑」的智能助手，帮助物业工作人员和业主用自然语言完成日常工作。\n\n## 你是谁\n\n- 你服务的是**当前登录用户**。…"}],
       "source": {"kind": "plugin", "plugin": "@deepseek-ai/dsh-system-prompt"},
       "id": "…"}},
     "surfaceOp": "append"
@@ -1035,7 +1035,7 @@ TOOLS(3): ['mcp__wuye__child_info', 'mcp__wuye__echo', 'mcp__wuye__env_probe']
  "data":{"turn":1,"step":1,
          "callId":"call_00_nr40Un8UenMz6SocCPBU5413",
          "name":"mcp__wuye__echo",
-         "arguments":"{\"text\": \"美家物业联通测试\"}"}}}
+         "arguments":"{\"text\": \"云邻AI智脑联通测试\"}"}}}
 ```
 
 **（d）工具执行结果**（`tool/result`）
@@ -1046,7 +1046,7 @@ TOOLS(3): ['mcp__wuye__child_info', 'mcp__wuye__echo', 'mcp__wuye__env_probe']
   "message":{
     "source":{"kind":"tool","callId":"call_00_nr40Un8UenMz6SocCPBU5413"},
     "content":[{"type":"tool-result","toolCallId":"call_00_nr40Un8UenMz6SocCPBU5413",
-      "content":[{"type":"text","text":"probe-echo:美家物业联通测试"}],
+      "content":[{"type":"text","text":"probe-echo:云邻AI智脑联通测试"}],
       "isError":false}],
     "role":"user","id":"faa92790-f3ad-44b8-aed1-18041bfd1b80"}}}}
 ```
@@ -1056,7 +1056,7 @@ TOOLS(3): ['mcp__wuye__child_info', 'mcp__wuye__echo', 'mcp__wuye__env_probe']
 ```json
 {"type":"assistant/message","data":{"turn":1,"step":2,"message":{
   "role":"assistant",
-  "content":[{"type":"text","text":"调用成功了，工具返回的原文是：\n\n```\nprobe-echo:美家物业联通测试\n```\n\n可以看到返回内容前面多了个 `probe-echo:` 前缀…"}],
+  "content":[{"type":"text","text":"调用成功了，工具返回的原文是：\n\n```\nprobe-echo:云邻AI智脑联通测试\n```\n\n可以看到返回内容前面多了个 `probe-echo:` 前缀…"}],
   "source":{"kind":"model","provider":"deepseek-official","model":"deepseek-v4-flash"}},"usage":{...}}}
 ```
 

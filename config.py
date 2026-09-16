@@ -24,7 +24,7 @@ FALLBACK_DATABASE_URL = "sqlite:///" + (INSTANCE_DIR / "wuye.db").as_posix()
 #: 需要原样透传给智能体运行时的环境变量前缀
 PASSTHROUGH_PREFIXES = ("AI_", "DEEPSEEK_", "DSH_", "BAILIAN_", "DASHSCOPE_")
 
-APP_NAME = "美家物业"
+APP_NAME = "云邻AI智脑"
 
 
 def load_env(path: str | os.PathLike | None = None, override: bool = False) -> None:

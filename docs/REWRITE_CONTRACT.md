@@ -1,4 +1,4 @@
-# 美家物业数字化系统 · 重写契约（v2，权威）
+# 云邻AI智脑 · 重写契约（v2，权威）
 
 > v2 定稿口径：本文件描述的每个技术点都必须能在仓库里逐条定位与复现。
 > 本文件是后端、前端、智能体集成三方的**唯一接口契约**；改动先改本文件并通知全员。
@@ -241,7 +241,7 @@ arrears_summary / work_order_stats / list_staff / whoami`
 {"type":"status","text":"正在思考…"}
 {"type":"tool","call_id":"…","name":"create_work_order","label":"创建报修工单","state":"running","args":{}}
 {"type":"tool","call_id":"…","name":"create_work_order","state":"done","ok":true,"summary":"工单 WO… 已创建"}
-{"type":"action","action_id":12,"tool":"delete_house","risk":"R3","preview":"删除房屋 美家花园1栋1单元101","expires_at":"…"}
+{"type":"action","action_id":12,"tool":"delete_house","risk":"R3","preview":"删除房屋 云邻花园1栋1单元101","expires_at":"…"}
 {"type":"delta","text":"已经为张伟报修："}
 {"type":"title","title":"1栋1单元101 水管漏水"}
 {"type":"done","text":"<权威全文>","message_id":123}

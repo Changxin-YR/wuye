@@ -228,7 +228,7 @@ check('URL 不应再带查询串', chatCall && !String(chatCall.url).includes('?
 // ---------------- 场景 2：确认卡片（R3 删除）
 scenario([
   'data: {"type":"status","text":"正在思考…"}\n\n',
-  'data: {"type":"action","action_id":12,"tool":"delete_house","risk":"R3","preview":"删除房屋 美家花园1栋1单元101","expires_at":"2999-01-01T00:00:00"}\n\n',
+  'data: {"type":"action","action_id":12,"tool":"delete_house","risk":"R3","preview":"删除房屋 云邻花园1栋1单元101","expires_at":"2999-01-01T00:00:00"}\n\n',
   'data: {"type":"delta","text":"这次操作风险较高，需要你确认。"}\n\n',
   'data: {"type":"done","message_id":124}\n\n',
 ]);
@@ -236,13 +236,13 @@ await step('场景 2', () => ask('把 1 栋 101 这套房删掉'));
 let card = chat.querySelector('.action-card');
 check('未渲染确认卡片', !!card);
 check('卡片缺少风险提示', !!card && card.textContent.includes('高风险操作'));
-check('卡片缺少预览文本', !!card && card.textContent.includes('删除房屋 美家花园1栋1单元101'));
+check('卡片缺少预览文本', !!card && card.textContent.includes('删除房屋 云邻花园1栋1单元101'));
 check('卡片缺少确认/取消按钮', !!card && card.querySelectorAll('button').length === 2);
 check('卡片数据缺少 action_id', !!card && card.dataset.actionId === '12');
 check('卡片包含内部术语 R3', !!card && /(^|[^A-Za-z])R3($|[^A-Za-z])/.test(card.textContent) === false);
 // 点击确认 → POST /ai/actions/12/confirm
 const confirmCard = card;
-setFetch([], {body: {ok: true, status: 'executed', message: '已删除房屋 美家花园1栋1单元101'}});
+setFetch([], {body: {ok: true, status: 'executed', message: '已删除房屋 云邻花园1栋1单元101'}});
 confirmCard.querySelectorAll('button')[0].click();
 await new Promise(resolve => setTimeout(resolve, 80));
 const confirmCall = calls.find(call => String(call.url).includes('/ai/actions/12/confirm'));
@@ -251,7 +251,7 @@ check('确认未用 POST', confirmCall && confirmCall.method === 'POST');
 check('确认缺少 X-CSRF-Token 头', confirmCall && confirmCall.options.headers['X-CSRF-Token'] === 'stub-token');
 check('确认 body 缺少 csrf_token', confirmCall && /csrf_token=stub-token/.test(String(confirmCall.options.body)));
 check('确认后卡片未标记完成', confirmCard.dataset.state === 'done' && confirmCard.classList.contains('is-done'));
-check('确认后未把结果插入消息流', chat.textContent.includes('已删除房屋 美家花园1栋1单元101'));
+check('确认后未把结果插入消息流', chat.textContent.includes('已删除房屋 云邻花园1栋1单元101'));
 check('确认后按钮未置灰', confirmCard.querySelectorAll('button').every(button => button.disabled === true));
 
 // ---------------- 场景 3：取消卡片 + 失败结果

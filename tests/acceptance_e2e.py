@@ -197,7 +197,7 @@ def main() -> int:
     print("\n=== 页面渲染（角色 × 页面） ===")
     pages = {
         "/": (None, ["工作台", "待派单"]),
-        "/houses": ("house.read", ["美家花园"]),
+        "/houses": ("house.read", ["云邻花园"]),
         "/persons": ("person.read", ["人员"]),
         "/orders": ("order.read", ["WO"]),
         "/orders/new": ("order.create", ["报修"]),

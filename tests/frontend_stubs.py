@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 NOW = dt.datetime(2026, 9, 12, 10, 0, 0)
 
-APP_NAME = "美家物业"
+APP_NAME = "云邻AI智脑"
 STATUS_TEXT = {0: "待派单", 1: "已派单", 2: "维修中", 3: "待验收", 4: "已关闭", 5: "已取消"}
 STATUS_CLASS = {0: "pending", 1: "dispatched", 2: "working", 3: "verifying", 4: "closed", 5: "cancelled"}
 HOUSE_STATUS_TEXT = {0: "空置", 1: "自住", 2: "出租"}
@@ -180,8 +180,8 @@ def order(oid=1024, status=2, urgency=0, actions=None, **extra):
         "status_class": STATUS_CLASS[status], "urgency": urgency, "urgency_text": URGENCY_TEXT[urgency],
         "category": "water", "category_text": CATEGORY_TEXT["water"],
         "description": "厨房水槽下面漏水，地面已经积水",
-        "house_id": 12, "house_full": "美家花园 1 栋 1 单元 101",
-        "community_name": "美家花园", "building_name": "1 栋", "unit": "1 单元", "room": "101",
+        "house_id": 12, "house_full": "云邻花园 1 栋 1 单元 101",
+        "community_name": "云邻花园", "building_name": "1 栋", "unit": "1 单元", "room": "101",
         "contact_name": "张伟", "contact_phone": "13800000001",
         "owner_id": 1, "owner_name": "张伟",
         "repairer_id": 9 if status else None, "repairer_name": "李师傅" if status else "",
@@ -219,8 +219,8 @@ def resident(pid=7, name="张伟", relation="owner", status="active"):
 
 
 def house(hid=12, room="101", **extra):
-    data = {"id": hid, "full_name": "美家花园 1 栋 1 单元 " + room, "community_id": 1,
-            "community_name": "美家花园", "building_id": 3, "building_name": "1 栋",
+    data = {"id": hid, "full_name": "云邻花园 1 栋 1 单元 " + room, "community_id": 1,
+            "community_name": "云邻花园", "building_id": 3, "building_name": "1 栋",
             "unit": "1 单元", "room": room, "area": 89.5, "status": 2,
             "status_text": HOUSE_STATUS_TEXT[2], "residents": [resident()]}
     data.update(extra)
@@ -228,7 +228,7 @@ def house(hid=12, room="101", **extra):
 
 
 def person_house(house_id=12, relation="owner", status="active"):
-    return {"house_id": house_id, "full_name": "美家花园 1 栋 1 单元 101",
+    return {"house_id": house_id, "full_name": "云邻花园 1 栋 1 单元 101",
             "relation": relation, "relation_text": RELATION_TEXT[relation],
             "status": status, "status_text": RELATION_STATUS_TEXT[status],
             "start_at": "2026-01-01 00:00:00", "end_at": ""}
@@ -242,7 +242,7 @@ def person(pid=7, name="张伟", **extra):
 
 
 def relation(rid=21, **extra):
-    data = {"id": rid, "house_id": 12, "full_name": "美家花园 1 栋 1 单元 101", "person_id": 7,
+    data = {"id": rid, "house_id": 12, "full_name": "云邻花园 1 栋 1 单元 101", "person_id": 7,
             "person_name": "张伟", "person_phone": "13800000001", "relation": "owner",
             "relation_text": RELATION_TEXT["owner"], "status": "active",
             "status_text": RELATION_STATUS_TEXT["active"], "start_at": "2026-01-01 00:00:00",
@@ -294,9 +294,9 @@ def case_houses(role):
     context = base_context(role)
     pag = pagination()
     context.update({
-        "communities": [{"id": 1, "name": "美家花园", "address": "文化路 88 号",
+        "communities": [{"id": 1, "name": "云邻花园", "address": "文化路 88 号",
                          "building_count": 2, "house_count": 24}],
-        "buildings": [{"id": 3, "name": "1 栋", "community_id": 1, "community_name": "美家花园",
+        "buildings": [{"id": 3, "name": "1 栋", "community_id": 1, "community_name": "云邻花园",
                        "house_count": 24}],
         "houses": [house(), house(13, room="102", status=0, status_text="空置", residents=[])],
         "pagination": pag, **pag,
@@ -421,7 +421,7 @@ def case_error(role):
 # v2 增量：租赁 / 投诉 / 访客 / 车辆车位 / 设备巡检 / 账单
 # --------------------------------------------------------------------------
 def lease_item(lid=31, status="active"):
-    return {"id": lid, "house_id": 12, "house_text": "美家花园 1 栋 1 单元 101",
+    return {"id": lid, "house_id": 12, "house_text": "云邻花园 1 栋 1 单元 101",
             "person_id": 7, "person_name": "张伟", "phone": "13800000001",
             "relation": "tenant", "relation_text": "租户", "status": status,
             "status_text": "在租" if status == "active" else "已退租", "rent": 3200.0, "rent_text": "3200",
@@ -431,7 +431,7 @@ def lease_item(lid=31, status="active"):
 def complaint_item(cid=41, status=0):
     text = {0: "待处理", 1: "处理中", 2: "已结案", 3: "已取消"}[status]
     return {"id": cid, "no": "TS20260912%04d" % cid, "house_id": 12,
-            "house_full": "美家花园 1 栋 1 单元 101", "house_label": "美家花园 1 栋 1 单元 101", "category": "noise", "category_text": "噪音扰民",
+            "house_full": "云邻花园 1 栋 1 单元 101", "house_label": "云邻花园 1 栋 1 单元 101", "category": "noise", "category_text": "噪音扰民",
             "content": "楼上装修噪音很大，晚上十点还在施工", "reporter_id": 7, "reporter_name": "张伟",
             "contact_phone": "13800000001", "reporter_phone": "13800000001", "handler_id": 9 if status == 1 else None,
             "handler_name": "黄磊" if status in (1, 2) else "", "status": status, "status_text": text,
@@ -442,15 +442,15 @@ def complaint_item(cid=41, status=0):
 def visitor_item(vid=51, status=0):
     text = {0: "待进", 1: "已进", 2: "已离", 3: "已取消"}[status]
     return {"id": vid, "community_id": 1, "building_id": 3, "house_id": 12,
-            "house_full": "美家花园 1 栋 1 单元 101", "house_label": "美家花园 1 栋 1 单元 101",
+            "house_full": "云邻花园 1 栋 1 单元 101", "house_label": "云邻花园 1 栋 1 单元 101",
             "name": "李娜", "phone": "13900000002", "operator_id": 9, "operator_name": "小美",
             "visit_at": NOW, "purpose": "走亲访友", "status": status, "status_text": text,
             "status_class": "visitor"}
 
 
 def vehicle_item(vid=61, status=0):
-    return {"id": vid, "community_id": 1, "house_id": 12, "house_full": "美家花园 1 栋 1 单元 101",
-            "house_label": "美家花园 1 栋 1 单元 101", "plate": "沪A12345", "brand": "大众 朗逸",
+    return {"id": vid, "community_id": 1, "house_id": 12, "house_full": "云邻花园 1 栋 1 单元 101",
+            "house_label": "云邻花园 1 栋 1 单元 101", "plate": "沪A12345", "brand": "大众 朗逸",
             "owner_person_id": 7, "owner_name": "张伟", "owner_phone": "13800000001",
             "space_code": "A-012" if status == 0 else "",
             "status": status, "status_text": "正常" if status == 0 else "已归档"}
@@ -460,8 +460,8 @@ def parking_item(pid=71, status=0):
     return {"id": pid, "community_id": 1, "code": "A-012", "status": status,
             "status_text": "占用" if status == 1 else "空闲",
             "house_id": 12 if status else None,
-            "house_full": "美家花园 1 栋 1 单元 101" if status else "",
-            "house_label": "美家花园 1 栋 1 单元 101" if status else "",
+            "house_full": "云邻花园 1 栋 1 单元 101" if status else "",
+            "house_label": "云邻花园 1 栋 1 单元 101" if status else "",
             "vehicle_id": 61 if status else None, "plate": "沪A12345" if status else ""}
 
 
@@ -486,7 +486,7 @@ def inspection_item(iid=91, status=0):
 
 def bill_item(bid=101, status=0):
     return {"id": bid, "no": "ZD20260912%04d" % bid, "house_id": 12,
-            "house_text": "美家花园 1 栋 1 单元 101", "person_id": 7, "person_name": "张伟",
+            "house_text": "云邻花园 1 栋 1 单元 101", "person_id": 7, "person_name": "张伟",
             "fee_type": "property", "fee_type_text": "物业费", "period": "2026-09",
             "amount": 320.0, "paid_amount": 0.0 if status == 0 else 320.0, "status": status,
             "status_text": {0: "待缴", 1: "部分缴纳", 2: "已缴", 3: "已作废"}[status],

@@ -107,7 +107,7 @@ def _resolve_display(session, policy, key: str, value: Any) -> str | None:
 
 
 def build_preview(session, policy, spec: ToolSpec, params: dict[str, Any]) -> str:
-    """生成人话预览，例：「删除房屋：美家花园 1栋1单元101」。"""
+    """生成人话预览，例：「删除房屋：云邻花园 1栋1单元101」。"""
     details: list[str] = []
     for key, value in params.items():
         display = _resolve_display(session, policy, key, value)

@@ -147,7 +147,7 @@ activePausedHandler = async params => {
         responseHeaders: [{name: 'Content-Type', value: 'application/json'}],
         body: Buffer.from(JSON.stringify({ok: true, actions: [
           {action_id: 31, tool: 'delete_house', label: '删除房屋', risk: 'R3',
-           preview: '删除房屋：美家花园 1栋1单元101', expires_at: '2999-01-01T00:00:00', session_id: 3},
+           preview: '删除房屋：云邻花园 1栋1单元101', expires_at: '2999-01-01T00:00:00', session_id: 3},
           {action_id: 32, tool: 'void_bill', label: '作废账单', risk: 'R3',
            preview: '作废账单 ZD2026091201', expires_at: '2000-01-01T00:00:00', session_id: 3},
         ]})).toString('base64'),
@@ -176,7 +176,7 @@ const restore = await send('Runtime.evaluate', {expression: `(() => {
 const restored = JSON.parse(restore.result.value);
 check('刷新后未恢复待确认卡片', restored.cards.length === 2);
 check('恢复的卡片缺少 label', restored.cards.some(c => c.text.includes('删除房屋')));
-check('恢复的卡片缺少预览', restored.cards.some(c => c.text.includes('美家花园 1栋1单元101')));
+check('恢复的卡片缺少预览', restored.cards.some(c => c.text.includes('云邻花园 1栋1单元101')));
 check('恢复的过期卡片未置灰', restored.cards.some(c => c.id === '32' && c.state === 'expired' && c.buttonsDisabled));
 check('恢复成功却没有提示用户', restored.hasNote);
 const dbg0 = await send('Runtime.evaluate', {expression: 'JSON.stringify({url: location.href, title: document.title, loggedIn: /退出/.test(document.body.textContent)})', returnByValue: true});

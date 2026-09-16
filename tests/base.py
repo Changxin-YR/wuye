@@ -151,7 +151,7 @@ def build_fixture(session) -> dict:
     session.flush()
 
     # 小区 / 楼栋 / 房屋
-    c1 = Community(name="美家花园", address="美家路 88 号")
+    c1 = Community(name="云邻花园", address="云邻路 88 号")
     c2 = Community(name="隔壁小区", address="隔壁路 1 号")
     session.add_all([c1, c2])
     session.flush()

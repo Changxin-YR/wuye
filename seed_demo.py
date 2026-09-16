@@ -1,7 +1,7 @@
 """演示数据种子（幂等：重复执行不会产生重复数据）。
 
 覆盖内容：
-- 小区：美家花园（主演示）+ 美家花园二期（用于对照数据范围隔离）
+- 小区：云邻花园（主演示）+ 云邻花园二期（用于对照数据范围隔离）
 - 楼栋 / 单元 / 房屋：1栋、2栋 + 二期3栋，共 16 套房屋
 - 账号：admin / manager01 / service01 / engineer01 / owner01，统一口令 ``Demo-only-292!``
 - 人员档案与房屋关系：张伟（owner01，1栋1单元101 业主）、李娜 ×2（同名消歧）、黄磊（engineer01）
@@ -10,7 +10,7 @@
 - AI 会话：1 条含 4 条消息的演示会话
 
 数据范围（与 ``permissions.ROLES`` 的默认范围一致）：
-- admin = all；manager01 / service01 = community（美家花园）；engineer01 = assigned；owner01 = self
+- admin = all；manager01 / service01 = community（云邻花园）；engineer01 = assigned；owner01 = self
 
 用法::
 
@@ -63,10 +63,10 @@ from models import (
 #: 演示统一口令（真实项目当然不会写死在代码里）
 DEMO_PASSWORD = "Demo-only-292!"
 
-COMMUNITY_NAME = "美家花园"
-COMMUNITY_ADDRESS = "美家路 88 号"
-SECOND_COMMUNITY_NAME = "美家花园二期"
-SECOND_COMMUNITY_ADDRESS = "美家路 100 号"
+COMMUNITY_NAME = "云邻花园"
+COMMUNITY_ADDRESS = "云邻路 88 号"
+SECOND_COMMUNITY_NAME = "云邻花园二期"
+SECOND_COMMUNITY_ADDRESS = "云邻路 100 号"
 
 #: 账号：(用户名, 姓名, 手机号, 角色, 数据范围)
 ACCOUNT_SPECS = [
@@ -211,7 +211,7 @@ ORDER_AUDIT_ACTION = {
 AGENT_SESSION_TITLE = "1栋1单元101 厨房漏水"
 AGENT_MESSAGES = [
     ("user", "1 栋 101 厨房漏水了，帮我报修"),
-    ("assistant", "已经为张伟报修：美家花园1栋1单元101 厨房水管漏水，工单已生成，当前状态是「待派单」。"),
+    ("assistant", "已经为张伟报修：云邻花园1栋1单元101 厨房水管漏水，工单已生成，当前状态是「待派单」。"),
     ("user", "现在到哪一步了"),
     ("assistant", "这张工单目前是「待派单」，还没有指派维修师傅。需要我派给黄磊吗？"),
 ]
@@ -840,7 +840,7 @@ def check(engine=None) -> bool:
         manager_communities = queries.list_communities(Policy(session, by_username["manager01"]), page_size=50)["items"]
         report(
             all(item["name"] != SECOND_COMMUNITY_NAME for item in manager_communities),
-            "经理账号看不到「美家花园二期」（小区隔离）",
+            "经理账号看不到「云邻花园二期」（小区隔离）",
         )
         owner_orders = queries.list_work_orders(Policy(session, by_username["owner01"]), page_size=50)["items"]
         report(
